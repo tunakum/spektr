@@ -19,7 +19,7 @@ def _limit_refs_per_domain(refs: list[str], max_per_domain: int = 3) -> list[str
     for url in refs:
         try:
             domain = urlparse(url).netloc.lower()
-        except Exception:
+        except ValueError:
             domain = url
         domain_count[domain] += 1
         if domain_count[domain] <= max_per_domain:

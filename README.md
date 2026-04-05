@@ -6,7 +6,7 @@
 
 CVE intelligence CLI. Fetches vulnerabilities from NVD, scores them using CVSS + EPSS + KEV data, and ranks results so you see what actually matters first.
 
-No paid APIs. Runs offline for core features. Built for pentesters and security folks who want fast answers from the terminal.
+No paid APIs. Cached results work offline. Built for pentesters and security folks who want fast answers from the terminal.
 
 ## Tech stack
 
@@ -86,11 +86,11 @@ spektr clear-cache
 +--------------------------- 10 CVEs found  (live) ---------------------------+
 
   #   Severity    CVE ID              CVSS   EPSS%   KEV    Score
-  1   CRITICAL    CVE-2021-44228      10.0   100.0   !!      8.0
-  2   CRITICAL    CVE-2017-5645        9.8    99.9    -      7.9
-  3   CRITICAL    CVE-2019-17571       9.8    97.2    -      7.8
-  4   CRITICAL    CVE-2021-45046       9.0   100.0    -      7.6
-  5   HIGH        CVE-2021-4104        7.5    98.6    -      6.9
+  1   CRITICAL    CVE-2021-44228      10.0   100.0   !!     10.0
+  2   CRITICAL    CVE-2021-45046       9.0   100.0    -      9.7
+  3   CRITICAL    CVE-2017-5645        9.8    99.9    -      9.9
+  4   CRITICAL    CVE-2019-17571       9.8    97.2    -      9.6
+  5   HIGH        CVE-2021-4104        7.5    98.6    -      8.9
 ```
 
 ## Scoring

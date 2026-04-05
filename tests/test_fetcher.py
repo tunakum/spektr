@@ -2,7 +2,7 @@
 
 import pytest
 
-from spektr.core.fetcher import CVERecord, Fetcher, _parse_cve
+from spektr.core.fetcher import CPEMatch, CVERecord, Fetcher, _parse_cve, _parse_version
 
 
 # --- Query splitting ---
@@ -37,26 +37,96 @@ def test_parse_query_version_with_letter() -> None:
     assert version == "1.1.1k"
 
 
-# --- Version matching ---
+# --- Version parsing ---
 
-def test_version_matches_exact() -> None:
+def test_parse_version_numeric() -> None:
+    assert _parse_version("1.18.0") == (1, 18, 0)
+
+
+def test_parse_version_ordering() -> None:
+    assert _parse_version("1.9.0") < _parse_version("1.18.0")
+
+
+def test_parse_version_with_letter() -> None:
+    assert _parse_version("1.1.1k") == (1, 1, 1, "k")
+
+
+# --- Version matching (CPE-based) ---
+
+def test_version_matches_cpe_range() -> None:
+    """Version in CPE range should match."""
+    record = CVERecord(
+        id="CVE-TEST", description="nginx vuln",
+        cpe_matches=[CPEMatch(
+            vendor="f5", product="nginx",
+            version_start_incl="1.3.0", version_end_excl="1.5.0",
+        )],
+    )
+    assert Fetcher._version_matches(record, "1.4.0", "nginx") is True
+
+
+def test_version_no_match_cpe_range() -> None:
+    """Version outside CPE range should not match."""
+    record = CVERecord(
+        id="CVE-TEST", description="nginx vuln",
+        cpe_matches=[CPEMatch(
+            vendor="f5", product="nginx",
+            version_start_incl="1.3.0", version_end_excl="1.5.0",
+        )],
+    )
+    assert Fetcher._version_matches(record, "1.5.0", "nginx") is False
+
+
+def test_version_matches_cpe_exact() -> None:
+    """Exact version in CPE should match."""
+    record = CVERecord(
+        id="CVE-TEST", description="nginx vuln",
+        cpe_matches=[CPEMatch(
+            vendor="f5", product="nginx", exact_version="1.4.0",
+        )],
+    )
+    assert Fetcher._version_matches(record, "1.4.0", "nginx") is True
+
+
+def test_version_matches_cpe_end_including() -> None:
+    """Version at inclusive upper bound should match."""
+    record = CVERecord(
+        id="CVE-TEST", description="nginx vuln",
+        cpe_matches=[CPEMatch(
+            vendor="f5", product="nginx",
+            version_end_incl="1.5.0",
+        )],
+    )
+    assert Fetcher._version_matches(record, "1.5.0", "nginx") is True
+
+
+def test_version_matches_description_fallback() -> None:
+    """When no CPE data, fall back to description matching."""
     record = CVERecord(id="CVE-TEST", description="Vulnerability in nginx 1.18.0 allows RCE")
     assert Fetcher._version_matches(record, "1.18.0") is True
 
 
-def test_version_matches_major_minor() -> None:
+def test_version_matches_description_major_minor_fallback() -> None:
+    """Description fallback should match major.minor."""
     record = CVERecord(id="CVE-TEST", description="Affects nginx before 1.18.2")
-    assert Fetcher._version_matches(record, "1.18.0") is True  # 1.18 matches
+    assert Fetcher._version_matches(record, "1.18.0") is True
 
 
-def test_version_no_match() -> None:
+def test_version_no_match_with_cpe_data() -> None:
+    """When CPE data exists but doesn't match, description is NOT used as fallback."""
+    record = CVERecord(
+        id="CVE-TEST", description="nginx 1.4.0 is mentioned here",
+        cpe_matches=[CPEMatch(
+            vendor="f5", product="nginx",
+            version_start_incl="2.0.0", version_end_excl="2.5.0",
+        )],
+    )
+    assert Fetcher._version_matches(record, "1.4.0", "nginx") is False
+
+
+def test_version_no_match_no_cpe() -> None:
     record = CVERecord(id="CVE-TEST", description="Vulnerability in nginx allows DoS")
     assert Fetcher._version_matches(record, "1.18.0") is False
-
-
-def test_version_matches_case_insensitive() -> None:
-    record = CVERecord(id="CVE-TEST", description="Apache Struts 2.3.X is affected")
-    assert Fetcher._version_matches(record, "2.3.1") is True  # 2.3 matches
 
 
 # --- NVD response parsing ---
@@ -90,6 +160,29 @@ SAMPLE_NVD_ITEM = {
         "references": [
             {"url": "https://example.com/advisory"},
             {"url": "https://example.com/patch"},
+        ],
+        "configurations": [
+            {
+                "nodes": [
+                    {
+                        "operator": "OR",
+                        "cpeMatch": [
+                            {
+                                "vulnerable": True,
+                                "criteria": "cpe:2.3:a:apache:log4j:*:*:*:*:*:*:*:*",
+                                "versionStartIncluding": "2.13.0",
+                                "versionEndExcluding": "2.15.0",
+                                "matchCriteriaId": "DUMMY-1",
+                            },
+                            {
+                                "vulnerable": True,
+                                "criteria": "cpe:2.3:a:apache:log4j:2.0:beta9:*:*:*:*:*:*",
+                                "matchCriteriaId": "DUMMY-2",
+                            },
+                        ],
+                    }
+                ]
+            }
         ],
         "published": "2021-12-10T10:15:00",
         "lastModified": "2023-11-06T18:15:00",
@@ -144,3 +237,22 @@ def test_parse_cve_defaults() -> None:
     assert record.epss_percentile is None
     assert record.in_kev is False
     assert record.spektr_score == 0.0
+
+
+def test_parse_cve_cpe_matches() -> None:
+    record = _parse_cve(SAMPLE_NVD_ITEM)
+    assert len(record.cpe_matches) == 2
+    # Range entry
+    m0 = record.cpe_matches[0]
+    assert m0.product == "log4j"
+    assert m0.version_start_incl == "2.13.0"
+    assert m0.version_end_excl == "2.15.0"
+    # Exact version entry
+    m1 = record.cpe_matches[1]
+    assert m1.exact_version == "2.0"
+
+
+def test_parse_cve_no_configurations() -> None:
+    item = {"cve": {"id": "CVE-OLD", "descriptions": [{"lang": "en", "value": "Old vuln"}]}}
+    record = _parse_cve(item)
+    assert record.cpe_matches == []

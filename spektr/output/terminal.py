@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from collections import Counter
+from typing import Any
 from urllib.parse import urlparse
 
 from rich.console import Console
@@ -54,7 +55,7 @@ def _limit_refs_per_domain(refs: list[str], max_per_domain: int = 3) -> list[str
     for url in refs:
         try:
             domain = urlparse(url).netloc.lower()
-        except Exception:
+        except ValueError:
             domain = url
         domain_count[domain] += 1
         if domain_count[domain] <= max_per_domain:
@@ -88,7 +89,7 @@ def print_header(query: str, total: int, cached: bool = False) -> None:
 def print_cve_table(records: list[CVERecord], sort_by: str = "spektr_score") -> None:
     """Print the main CVE results table."""
     # Sort records
-    sort_keys: dict[str, callable] = {
+    sort_keys: dict[str, Any] = {
         "spektr_score": lambda r: r.spektr_score,
         "cvss": lambda r: r.cvss_v3_score or 0,
         "epss": lambda r: r.epss_percentile or 0,

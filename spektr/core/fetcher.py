@@ -22,6 +22,60 @@ NVD_RATE_LIMIT_DELAY = 6.0  # seconds between requests (5 req/30s without key)
 _VERSION_RE = re.compile(r"^(.+?)\s+([\d][\d.]*\S*)$")
 
 
+def _parse_version(v: str) -> tuple[int | str, ...]:
+    """Parse a version string into a comparable tuple.
+
+    Each segment is converted to int if possible, otherwise kept as str.
+    This allows correct comparison: "1.9.0" < "1.18.0".
+    """
+    parts: list[int | str] = []
+    for segment in re.split(r"[.\-]", v):
+        # Split trailing letters: "1k" -> 1, "k"
+        m = re.match(r"^(\d+)([a-zA-Z].*)$", segment)
+        if m:
+            parts.append(int(m.group(1)))
+            parts.append(m.group(2))
+        elif segment.isdigit():
+            parts.append(int(segment))
+        else:
+            parts.append(segment)
+    return tuple(parts)
+
+
+def _version_in_range(
+    version: str,
+    start_incl: str | None,
+    start_excl: str | None,
+    end_incl: str | None,
+    end_excl: str | None,
+) -> bool:
+    """Check if a version falls within a CPE version range."""
+    v = _parse_version(version)
+
+    if start_incl is not None and v < _parse_version(start_incl):
+        return False
+    if start_excl is not None and v <= _parse_version(start_excl):
+        return False
+    if end_incl is not None and v > _parse_version(end_incl):
+        return False
+    if end_excl is not None and v >= _parse_version(end_excl):
+        return False
+    return True
+
+
+@dataclass
+class CPEMatch:
+    """A single CPE match criteria from NVD configurations."""
+
+    vendor: str
+    product: str
+    version_start_incl: str | None = None
+    version_start_excl: str | None = None
+    version_end_incl: str | None = None
+    version_end_excl: str | None = None
+    exact_version: str | None = None  # non-wildcard version in CPE URI
+
+
 @dataclass
 class CVERecord:
     """A single CVE entry with all relevant fields."""
@@ -37,6 +91,7 @@ class CVERecord:
     last_modified: str = ""
     references: list[str] = field(default_factory=list)
     cwe_ids: list[str] = field(default_factory=list)
+    cpe_matches: list[CPEMatch] = field(default_factory=list)
     in_kev: bool = False
     spektr_score: float = 0.0
 
@@ -84,6 +139,33 @@ def _parse_cve(item: dict[str, Any]) -> CVERecord:
     # References
     refs = [r.get("url", "") for r in cve.get("references", []) if r.get("url")]
 
+    # CPE configurations — extract vulnerable version ranges
+    cpe_matches: list[CPEMatch] = []
+    for config in cve.get("configurations", []):
+        for node in config.get("nodes", []):
+            for match in node.get("cpeMatch", []):
+                if not match.get("vulnerable", False):
+                    continue
+                criteria = match.get("criteria", "")
+                # CPE 2.3 format: cpe:2.3:part:vendor:product:version:...
+                parts = criteria.split(":")
+                if len(parts) < 6:
+                    continue
+                vendor = parts[3]
+                product = parts[4]
+                version_field = parts[5] if len(parts) > 5 else "*"
+                exact_ver = version_field if version_field not in ("*", "-") else None
+
+                cpe_matches.append(CPEMatch(
+                    vendor=vendor,
+                    product=product,
+                    exact_version=exact_ver,
+                    version_start_incl=match.get("versionStartIncluding"),
+                    version_start_excl=match.get("versionStartExcluding"),
+                    version_end_incl=match.get("versionEndIncluding"),
+                    version_end_excl=match.get("versionEndExcluding"),
+                ))
+
     return CVERecord(
         id=cve_id,
         description=desc,
@@ -94,7 +176,30 @@ def _parse_cve(item: dict[str, Any]) -> CVERecord:
         last_modified=cve.get("lastModified", ""),
         references=refs,
         cwe_ids=cwe_ids,
+        cpe_matches=cpe_matches,
     )
+
+
+def _cpe_match_to_dict(m: CPEMatch) -> dict[str, Any]:
+    """Serialize a CPEMatch for caching."""
+    return {
+        "vendor": m.vendor,
+        "product": m.product,
+        "exact_version": m.exact_version,
+        "version_start_incl": m.version_start_incl,
+        "version_start_excl": m.version_start_excl,
+        "version_end_incl": m.version_end_incl,
+        "version_end_excl": m.version_end_excl,
+    }
+
+
+def _record_from_dict(d: dict[str, Any]) -> CVERecord:
+    """Deserialize a dict (from cache) into a CVERecord."""
+    d = dict(d)  # shallow copy to avoid mutating cached data
+    cpe_raw = d.pop("cpe_matches", [])
+    record = CVERecord(**d)
+    record.cpe_matches = [CPEMatch(**m) for m in cpe_raw]
+    return record
 
 
 def _record_to_dict(r: CVERecord) -> dict[str, Any]:
@@ -111,6 +216,7 @@ def _record_to_dict(r: CVERecord) -> dict[str, Any]:
         "last_modified": r.last_modified,
         "references": r.references,
         "cwe_ids": r.cwe_ids,
+        "cpe_matches": [_cpe_match_to_dict(m) for m in r.cpe_matches],
         "in_kev": r.in_kev,
         "spektr_score": r.spektr_score,
     }
@@ -150,18 +256,47 @@ class Fetcher:
         return keyword.strip(), None
 
     @staticmethod
-    def _version_matches(record: CVERecord, version: str) -> bool:
-        """Check if a CVE likely affects the given version (heuristic)."""
-        # Check description for version mention
-        desc_lower = record.description.lower()
-        if version in desc_lower:
-            return True
-        # Check for major.minor match (e.g. "1.18" matches "1.18.0")
-        parts = version.split(".")
-        if len(parts) >= 2:
-            major_minor = ".".join(parts[:2])
-            if major_minor in desc_lower:
+    def _version_matches(record: CVERecord, version: str, product: str = "") -> bool:
+        """Check if a CVE affects the given version using CPE data, with description fallback."""
+        product_lower = product.lower().replace(" ", "_")
+
+        # 1. CPE-based matching (structured, reliable)
+        for cpe in record.cpe_matches:
+            # If we have a product name, check it matches the CPE product
+            if product_lower and product_lower not in cpe.product.lower():
+                continue
+
+            # Exact version match in CPE URI
+            if cpe.exact_version and cpe.exact_version == version:
                 return True
+
+            # Range-based match
+            has_range = any([
+                cpe.version_start_incl,
+                cpe.version_start_excl,
+                cpe.version_end_incl,
+                cpe.version_end_excl,
+            ])
+            if has_range and _version_in_range(
+                version,
+                cpe.version_start_incl,
+                cpe.version_start_excl,
+                cpe.version_end_incl,
+                cpe.version_end_excl,
+            ):
+                return True
+
+        # 2. Description fallback (for CVEs without CPE data)
+        if not record.cpe_matches:
+            desc_lower = record.description.lower()
+            if version in desc_lower:
+                return True
+            parts = version.split(".")
+            if len(parts) >= 2:
+                major_minor = ".".join(parts[:2])
+                if major_minor in desc_lower:
+                    return True
+
         return False
 
     def search(
@@ -179,7 +314,7 @@ class Fetcher:
         cached = self._cache.get(cache_key)
         if cached is not None:
             console.print("[dim]  Using cached results[/dim]")
-            return [CVERecord(**r) for r in cached]
+            return [_record_from_dict(r) for r in cached]
 
         search_term, version = self._parse_query(keyword)
 
@@ -225,8 +360,7 @@ class Fetcher:
 
         # Filter by version if specified
         if version:
-            filtered = [r for r in records if self._version_matches(r, version)]
-            # If strict match finds too few, fall back to all results for the software
+            filtered = [r for r in records if self._version_matches(r, version, search_term)]
             if len(filtered) < 3:
                 console.print(
                     f"[dim]  Few exact version matches - showing all {search_term} CVEs[/dim]"
@@ -247,7 +381,7 @@ class Fetcher:
         cache_key = f"cve:{cve_id}"
         cached = self._cache.get(cache_key)
         if cached is not None:
-            return CVERecord(**cached)
+            return _record_from_dict(cached)
 
         self._rate_limit_wait()
 
