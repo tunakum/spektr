@@ -116,8 +116,11 @@ CVE intelligence and triage CLI
   --output, -o     Export results to Markdown file
 
 [bold red]Scoring:[/bold red]
-  spektr score (0-10) = CVSS/10 x 0.4 + EPSS percentile x 0.4 + KEV x 0.2
-  Data from NVD (CVSS), FIRST.org (EPSS), and CISA (KEV catalog).
+  spektr score = (0.35 × CVSS) + (0.65 × EPSS² × 10), capped at 10
+  If in CISA KEV: score × 1.3
+
+  EPSS is non-linear — a CVE at 90th percentile scores much higher than one 
+  at 45th percentile. KEV adds a %30 boost on top
 
 [bold red]Config file:[/bold red]
   ~/.config/spektr/config.toml
