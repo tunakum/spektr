@@ -118,7 +118,7 @@ Developed with [Claude](https://claude.ai) (Anthropic) as an AI coding assistant
 
 ## License
 
-[MIT](LICENSE) © 2025 Tunahan Kum
+[MIT](LICENSE) © 2026 Tunahan Kum
 
 ## Contact
 
