@@ -88,9 +88,11 @@ class Scorer:
     def score(self, records: list[CVERecord]) -> list[CVERecord]:
         """Enrich CVE records with EPSS, KEV, and compute spektr_score.
 
-        Formula (all values normalized 0-1):
-            spektr_score = (cvss/10 * 0.4) + (epss_percentile * 0.4) + (kev * 0.2)
-        Displayed as 0-10 for readability.
+        Formula:
+            epss_scaled = (epss_percentile ** 2) * 10
+            score = (0.35 * cvss) + (0.65 * epss_scaled)
+            if KEV: score *= 1.3
+            capped at 10
         """
         if not records:
             return records
@@ -111,11 +113,22 @@ class Scorer:
             record.in_kev = record.id in kev_set
 
             # Compute spektr_score
-            cvss_norm = (record.cvss_v3_score or 0.0) / 10.0
-            epss_pct = record.epss_percentile or 0.0
-            kev_val = 1.0 if record.in_kev else 0.0
+            cvss = record.cvss_v3_score or 0.0
+            epss_percentile = record.epss_percentile or 0.0
 
-            raw = (cvss_norm * 0.4) + (epss_pct * 0.4) + (kev_val * 0.2)
-            record.spektr_score = round(raw * 10, 1)  # scale to 0-10
+            # normalize safety
+            if epss_percentile > 1:
+                epss_percentile /= 100
+            # non-linear EPSS
+            epss_scaled = (epss_percentile ** 2) * 10  # 0–10
+            # core score
+            score = (0.35 * cvss) + (0.65 * epss_scaled)
+            # real-world exploitation boost
+            if record.in_kev:
+                score *= 1.3
+            # cap
+            score = min(score, 10)
+
+            record.spektr_score = round(score, 1)
 
         return records

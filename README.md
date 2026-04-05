@@ -95,15 +95,12 @@ spektr clear-cache
 
 ## Scoring
 
-spektr score = weighted combination of three signals:
+```
+spektr score = (0.35 × CVSS) + (0.65 × EPSS²×10), capped at 10
+If in CISA KEV: score × 1.3
+```
 
-| Signal | Weight | Source |
-|--------|--------|--------|
-| CVSS v3 base score (normalized) | 40% | NVD |
-| EPSS percentile | 40% | FIRST.org |
-| KEV status | 20% | CISA |
-
-A CVE with high CVSS but low EPSS (theoretical risk, rarely exploited) scores lower than one with moderate CVSS but high EPSS (actively exploited in the wild). That's the point.
+EPSS is non-linear — a CVE at 90th percentile scores much higher than one at 45th percentile, even though it's only 2× the raw value. KEV adds a 30% boost on top.
 
 ## Roadmap
 
