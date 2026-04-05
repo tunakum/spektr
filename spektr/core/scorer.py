@@ -1,0 +1,121 @@
+"""Context-aware risk scoring: CVSS + EPSS + KEV combined into spektr_score."""
+
+from __future__ import annotations
+
+import httpx
+from rich.console import Console
+
+from spektr.core.cache import Cache, DEFAULT_CVE_TTL
+from spektr.core.fetcher import CVERecord
+
+console = Console(stderr=True)
+
+EPSS_API_URL = "https://api.first.org/data/v1/epss"
+KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+REQUEST_TIMEOUT = 30
+
+
+class Scorer:
+    """Enriches CVE records with EPSS scores, KEV status, and a unified spektr_score."""
+
+    def __init__(self, cache: Cache) -> None:
+        self._cache = cache
+
+    def _fetch_epss_batch(self, cve_ids: list[str]) -> dict[str, tuple[float, float]]:
+        """Fetch EPSS scores for multiple CVEs in one request.
+
+        Returns a mapping of CVE-ID -> (epss_score, epss_percentile).
+        """
+        if not cve_ids:
+            return {}
+
+        cache_key = "epss:" + ",".join(sorted(cve_ids))
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return {k: tuple(v) for k, v in cached.items()}
+
+        try:
+            with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
+                resp = client.get(EPSS_API_URL, params={"cve": ",".join(cve_ids)})
+                resp.raise_for_status()
+        except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.ConnectError):
+            console.print("[dim]  Could not fetch EPSS data - scoring without it[/dim]")
+            return {}
+
+        try:
+            body = resp.json()
+        except ValueError:
+            console.print("[dim]  EPSS returned invalid data - scoring without it[/dim]")
+            return {}
+
+        result: dict[str, tuple[float, float]] = {}
+        for entry in body.get("data", []):
+            cid = entry.get("cve", "")
+            score = float(entry.get("epss", 0))
+            percentile = float(entry.get("percentile", 0))
+            result[cid] = (score, percentile)
+
+        # Cache as list pairs for JSON serialization
+        self._cache.set(cache_key, {k: list(v) for k, v in result.items()}, DEFAULT_CVE_TTL)
+        return result
+
+    def _load_kev_set(self) -> set[str]:
+        """Load CISA KEV catalog (cached for 24h). Returns set of CVE IDs."""
+        cache_key = "kev:catalog"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return set(cached)
+
+        headers = {"User-Agent": "spektr/0.1.0"}
+        try:
+            with httpx.Client(timeout=REQUEST_TIMEOUT, headers=headers) as client:
+                resp = client.get(KEV_URL)
+                resp.raise_for_status()
+        except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.ConnectError):
+            console.print("[dim]  Could not fetch KEV catalog - scoring without it[/dim]")
+            return set()
+
+        try:
+            data = resp.json()
+        except ValueError:
+            console.print("[dim]  KEV returned invalid data - scoring without it[/dim]")
+            return set()
+
+        kev_ids = [v.get("cveID", "") for v in data.get("vulnerabilities", [])]
+        self._cache.set(cache_key, kev_ids, DEFAULT_CVE_TTL)
+        return set(kev_ids)
+
+    def score(self, records: list[CVERecord]) -> list[CVERecord]:
+        """Enrich CVE records with EPSS, KEV, and compute spektr_score.
+
+        Formula (all values normalized 0-1):
+            spektr_score = (cvss/10 * 0.4) + (epss_percentile * 0.4) + (kev * 0.2)
+        Displayed as 0-10 for readability.
+        """
+        if not records:
+            return records
+
+        # Batch fetch EPSS
+        cve_ids = [r.id for r in records]
+        epss_map = self._fetch_epss_batch(cve_ids)
+
+        # Load KEV catalog
+        kev_set = self._load_kev_set()
+
+        for record in records:
+            # EPSS enrichment
+            if record.id in epss_map:
+                record.epss_score, record.epss_percentile = epss_map[record.id]
+
+            # KEV enrichment
+            record.in_kev = record.id in kev_set
+
+            # Compute spektr_score
+            cvss_norm = (record.cvss_v3_score or 0.0) / 10.0
+            epss_pct = record.epss_percentile or 0.0
+            kev_val = 1.0 if record.in_kev else 0.0
+
+            raw = (cvss_norm * 0.4) + (epss_pct * 0.4) + (kev_val * 0.2)
+            record.spektr_score = round(raw * 10, 1)  # scale to 0-10
+
+        return records
