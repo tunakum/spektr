@@ -71,3 +71,9 @@ class Cache:
     def close(self) -> None:
         """Close the database connection."""
         self._conn.close()
+
+    def __enter__(self) -> Cache:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()

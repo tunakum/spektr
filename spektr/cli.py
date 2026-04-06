@@ -120,7 +120,7 @@ CVE intelligence and triage CLI
   If in CISA KEV: score × 1.3
 
   EPSS is non-linear — a CVE at 90th percentile scores much higher than one 
-  at 45th percentile. KEV adds a %30 boost on top
+  at 45th percentile. KEV adds a 30% boost on top
 
 [bold red]Config file:[/bold red]
   ~/.config/spektr/config.toml
@@ -217,45 +217,44 @@ def _do_search(
     cfg = load_config()
     api_key = cfg.get("nvd_api_key") or None
 
-    cache = Cache()
+    with Cache() as cache:
+        if no_cache:
+            cache.invalidate(f"query:{target}:{severity}:{limit}")
 
-    if no_cache:
-        cache.invalidate(f"query:{target}:{severity}:{limit}")
+        fetcher = Fetcher(cache=cache, api_key=api_key)
+        scorer = Scorer(cache=cache)
 
-    fetcher = Fetcher(cache=cache, api_key=api_key)
-    scorer = Scorer(cache=cache)
+        with Progress(
+            SpinnerColumn(style="red"),
+            TextColumn("[bold white]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            progress.add_task("Fetching CVEs from NVD...", total=None)
+            records, from_cache = fetcher.search(keyword=target, severity=severity, limit=limit)
 
-    with Progress(
-        SpinnerColumn(style="red"),
-        TextColumn("[bold white]{task.description}"),
-        console=console,
-        transient=True,
-    ) as progress:
-        progress.add_task("Fetching CVEs from NVD...", total=None)
-        records = fetcher.search(keyword=target, severity=severity, limit=limit)
+        if not records:
+            print_error(f"No CVEs found for '{target}'")
+            console.print(
+                "\n[dim]  Tip: Try using the software name and version "
+                "(e.g. 'nginx 1.18.0')\n"
+                "  or look up a CVE ID directly with "
+                "'spektr cve CVE-XXXX-XXXX'[/dim]\n"
+            )
+            raise typer.Exit(1)
 
-    if not records:
-        print_error(f"No CVEs found for '{target}'")
-        console.print(
-            "\n[dim]  Tip: Try using the software name and version "
-            "(e.g. 'nginx 1.18.0')\n"
-            "  or look up a CVE ID directly with "
-            "'spektr cve CVE-XXXX-XXXX'[/dim]\n"
-        )
-        raise typer.Exit(1)
+        with Progress(
+            SpinnerColumn(style="red"),
+            TextColumn("[bold white]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            progress.add_task("Enriching with EPSS + KEV data...", total=None)
+            records = scorer.score(records)
 
-    with Progress(
-        SpinnerColumn(style="red"),
-        TextColumn("[bold white]{task.description}"),
-        console=console,
-        transient=True,
-    ) as progress:
-        progress.add_task("Enriching with EPSS + KEV data...", total=None)
-        records = scorer.score(records)
-
-    print_header(target, len(records))
+    print_header(target, len(records), cached=from_cache)
     print_cve_table(records, sort_by=sort)
-    print_footer()
+    print_footer(cached=from_cache)
 
     if output is not None:
         out_path = output if output != "" else None
@@ -300,7 +299,7 @@ def main(
         return
 
     # _SpektrGroup.invoke moved unrecognised tokens into ctx.args.
-    target: str | None = ctx.args[0] if ctx.args else None
+    target: str | None = " ".join(ctx.args) if ctx.args else None
 
     if target is None:
         _print_banner()
@@ -323,8 +322,8 @@ def main(
 @app.command(name="clear-cache")
 def clear_cache() -> None:
     """Clear all cached NVD/EPSS/KEV data."""
-    cache = Cache()
-    cache.clear()
+    with Cache() as cache:
+        cache.clear()
     console.print("[green]Cache cleared.[/green]")
 
 
@@ -339,26 +338,27 @@ def cve(
     cfg = load_config()
     api_key = cfg.get("nvd_api_key") or None
 
-    cache = Cache()
-    fetcher = Fetcher(cache=cache, api_key=api_key)
-    scorer = Scorer(cache=cache)
+    with Cache() as cache:
+        fetcher = Fetcher(cache=cache, api_key=api_key)
+        scorer = Scorer(cache=cache)
 
-    with Progress(
-        SpinnerColumn(style="red"),
-        TextColumn("[bold white]{task.description}"),
-        console=console,
-        transient=True,
-    ) as progress:
-        progress.add_task(f"Fetching {cve_id}...", total=None)
-        record = fetcher.get_cve(cve_id)
+        with Progress(
+            SpinnerColumn(style="red"),
+            TextColumn("[bold white]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            progress.add_task(f"Fetching {cve_id}...", total=None)
+            record, from_cache = fetcher.get_cve(cve_id)
 
-    if record is None:
-        print_error(f"CVE '{cve_id}' not found")
-        raise typer.Exit(1)
+        if record is None:
+            print_error(f"CVE '{cve_id}' not found")
+            raise typer.Exit(1)
 
-    records = scorer.score([record])
+        records = scorer.score([record])
+
     print_cve_detail(records[0])
-    print_footer()
+    print_footer(cached=from_cache)
 
     if output is not None:
         out_path = output if output != "" else None

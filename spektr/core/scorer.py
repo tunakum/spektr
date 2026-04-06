@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 from rich.console import Console
 
+from spektr import __version__
 from spektr.core.cache import Cache, DEFAULT_CVE_TTL
 from spektr.core.fetcher import CVERecord
 
@@ -25,38 +26,47 @@ class Scorer:
         """Fetch EPSS scores for multiple CVEs in one request.
 
         Returns a mapping of CVE-ID -> (epss_score, epss_percentile).
+        Caches per-CVE so results are reusable across different searches.
         """
         if not cve_ids:
             return {}
 
-        cache_key = "epss:" + ",".join(sorted(cve_ids))
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            return {k: tuple(v) for k, v in cached.items()}
+        result: dict[str, tuple[float, float]] = {}
+        uncached: list[str] = []
+
+        # Check per-CVE cache first
+        for cid in cve_ids:
+            cached = self._cache.get(f"epss:{cid}")
+            if cached is not None:
+                result[cid] = tuple(cached)
+            else:
+                uncached.append(cid)
+
+        if not uncached:
+            return result
 
         try:
             with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
-                resp = client.get(EPSS_API_URL, params={"cve": ",".join(cve_ids)})
+                resp = client.get(EPSS_API_URL, params={"cve": ",".join(uncached)})
                 resp.raise_for_status()
-        except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.ConnectError):
+        except httpx.HTTPError:
             console.print("[dim]  Could not fetch EPSS data - scoring without it[/dim]")
-            return {}
+            return result
 
         try:
             body = resp.json()
         except ValueError:
             console.print("[dim]  EPSS returned invalid data - scoring without it[/dim]")
-            return {}
+            return result
 
-        result: dict[str, tuple[float, float]] = {}
         for entry in body.get("data", []):
             cid = entry.get("cve", "")
             score = float(entry.get("epss", 0))
             percentile = float(entry.get("percentile", 0))
             result[cid] = (score, percentile)
+            # Cache per-CVE
+            self._cache.set(f"epss:{cid}", [score, percentile], DEFAULT_CVE_TTL)
 
-        # Cache as list pairs for JSON serialization
-        self._cache.set(cache_key, {k: list(v) for k, v in result.items()}, DEFAULT_CVE_TTL)
         return result
 
     def _load_kev_set(self) -> set[str]:
@@ -66,12 +76,12 @@ class Scorer:
         if cached is not None:
             return set(cached)
 
-        headers = {"User-Agent": "spektr/0.1.0"}
+        headers = {"User-Agent": f"spektr/{__version__}"}
         try:
             with httpx.Client(timeout=REQUEST_TIMEOUT, headers=headers) as client:
                 resp = client.get(KEV_URL)
                 resp.raise_for_status()
-        except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.ConnectError):
+        except httpx.HTTPError:
             console.print("[dim]  Could not fetch KEV catalog - scoring without it[/dim]")
             return set()
 
@@ -113,8 +123,8 @@ class Scorer:
             record.in_kev = record.id in kev_set
 
             # Compute spektr_score
-            cvss = record.cvss_v3_score or 0.0
-            epss_percentile = record.epss_percentile or 0.0
+            cvss = record.cvss_v3_score if record.cvss_v3_score is not None else 0.0
+            epss_percentile = record.epss_percentile if record.epss_percentile is not None else 0.0
 
             # normalize safety
             if epss_percentile > 1:

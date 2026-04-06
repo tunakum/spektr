@@ -14,6 +14,7 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
+from spektr import __version__
 from spektr.core.fetcher import CVERecord
 
 # Force UTF-8 output on Windows to avoid charmap encoding errors
@@ -67,7 +68,7 @@ def _truncate(text: str, max_len: int = 60) -> str:
     """Truncate text to max_len with ellipsis."""
     if len(text) <= max_len:
         return text
-    return text[: max_len - 1] + "..."
+    return text[: max_len - 3] + "..."
 
 
 def print_header(query: str, total: int, cached: bool = False) -> None:
@@ -92,7 +93,7 @@ def print_cve_table(records: list[CVERecord], sort_by: str = "spektr_score") -> 
     sort_keys: dict[str, Any] = {
         "spektr_score": lambda r: r.spektr_score,
         "cvss": lambda r: r.cvss_v3_score or 0,
-        "epss": lambda r: r.epss_percentile or 0,
+        "epss": lambda r: r.epss_percentile if r.epss_percentile is not None else 0,
         "published": lambda r: r.published,
     }
     key_fn = sort_keys.get(sort_by, sort_keys["spektr_score"])
@@ -119,7 +120,7 @@ def print_cve_table(records: list[CVERecord], sort_by: str = "spektr_score") -> 
     for i, record in enumerate(sorted_records, 1):
         severity_badge = _severity_badge(record.cvss_v3_severity)
         cvss_str = f"{record.cvss_v3_score:.1f}" if record.cvss_v3_score is not None else "-"
-        epss_str = f"{record.epss_percentile * 100:.1f}" if record.epss_percentile else "-"
+        epss_str = f"{record.epss_percentile * 100:.1f}" if record.epss_percentile is not None else "-"
         kev_str = Text("!!", style="bold red") if record.in_kev else Text("-", style="dim")
         score_str = Text(f"{record.spektr_score:.1f}", style=_score_color(record.spektr_score))
         desc = _truncate(record.description)
@@ -153,8 +154,9 @@ def print_cve_detail(record: CVERecord) -> None:
     if record.cvss_v3_vector:
         lines.append(f"  Vector:    [dim]{record.cvss_v3_vector}[/dim]")
     if record.epss_score is not None:
+        pct = record.epss_percentile if record.epss_percentile is not None else 0
         lines.append(f"  EPSS:      {record.epss_score:.4f} "
-                      f"(top {(1 - (record.epss_percentile or 0)) * 100:.1f}%)")
+                      f"(top {(1 - pct) * 100:.1f}%)")
     if record.in_kev:
         lines.append("  KEV:       [bold red]!! In CISA Known Exploited Vulnerabilities[/bold red]")
 
@@ -164,8 +166,10 @@ def print_cve_detail(record: CVERecord) -> None:
 
     if record.cwe_ids:
         lines.append(f"  CWEs:      {', '.join(dict.fromkeys(record.cwe_ids))}")
-    lines.append(f"  Published: {record.published[:10]}")
-    lines.append(f"  Modified:  {record.last_modified[:10]}")
+    if record.published:
+        lines.append(f"  Published: {record.published[:10]}")
+    if record.last_modified:
+        lines.append(f"  Modified:  {record.last_modified[:10]}")
 
     if record.references:
         capped_refs = _limit_refs_per_domain(record.references)
@@ -203,4 +207,4 @@ def print_footer(cached: bool = False) -> None:
     """Print the footer with data source info."""
     source = "cache" if cached else "NVD API v2 + EPSS + KEV"
     console.print(Rule(style="dim red"))
-    console.print(f"[dim]  Data: {source}  |  spektr v0.1.0[/dim]\n")
+    console.print(f"[dim]  Data: {source}  |  spektr v{__version__}[/dim]\n")

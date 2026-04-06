@@ -54,7 +54,7 @@ def generate_markdown(
     sort_keys = {
         "spektr_score": lambda r: r.spektr_score,
         "cvss": lambda r: r.cvss_v3_score or 0,
-        "epss": lambda r: r.epss_percentile or 0,
+        "epss": lambda r: r.epss_percentile if r.epss_percentile is not None else 0,
         "published": lambda r: r.published,
     }
     key_fn = sort_keys.get(sort_by, sort_keys["spektr_score"])
@@ -73,7 +73,7 @@ def generate_markdown(
     for i, r in enumerate(sorted_records, 1):
         sev = _severity_label(r.cvss_v3_severity)
         cvss = f"{r.cvss_v3_score:.1f}" if r.cvss_v3_score is not None else "-"
-        epss = f"{r.epss_percentile * 100:.1f}" if r.epss_percentile else "-"
+        epss = f"{r.epss_percentile * 100:.1f}" if r.epss_percentile is not None else "-"
         kev = "!!" if r.in_kev else "-"
         score = f"{r.spektr_score:.1f}"
         lines.append(f"| {i} | {sev} | {r.id} | {cvss} | {epss} | {kev} | {score} |")
@@ -93,7 +93,8 @@ def generate_markdown(
         if r.cvss_v3_vector:
             details.append(f"- **Vector**: `{r.cvss_v3_vector}`")
         if r.epss_score is not None:
-            details.append(f"- **EPSS**: {r.epss_score:.4f} (top {(1 - (r.epss_percentile or 0)) * 100:.1f}%)")
+            pct = r.epss_percentile if r.epss_percentile is not None else 0
+            details.append(f"- **EPSS**: {r.epss_score:.4f} (top {(1 - pct) * 100:.1f}%)")
         if r.in_kev:
             details.append("- **KEV**: In CISA Known Exploited Vulnerabilities")
         details.append(f"- **spektr score**: {r.spektr_score:.1f}/10.0")
@@ -147,7 +148,10 @@ def save_report(
             path = path / _auto_filename(query)
         # Prompt before overwriting existing files
         if path.exists():
-            answer = input(f"  '{path.name}' already exists. Overwrite? [y/N] ").strip().lower()
+            try:
+                answer = input(f"  '{path.name}' already exists. Overwrite? [y/N] ").strip().lower()
+            except EOFError:
+                answer = "n"
             if answer != "y":
                 path = Path(_auto_filename(query))
 

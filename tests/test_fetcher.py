@@ -40,7 +40,7 @@ def test_parse_query_version_with_letter() -> None:
 # --- Version parsing ---
 
 def test_parse_version_numeric() -> None:
-    assert _parse_version("1.18.0") == (1, 18, 0)
+    assert _parse_version("1.18.0") == ((1, ""), (18, ""), (0, ""))
 
 
 def test_parse_version_ordering() -> None:
@@ -48,7 +48,12 @@ def test_parse_version_ordering() -> None:
 
 
 def test_parse_version_with_letter() -> None:
-    assert _parse_version("1.1.1k") == (1, 1, 1, "k")
+    assert _parse_version("1.1.1k") == ((1, ""), (1, ""), (1, ""), (-1, "k"))
+
+
+def test_parse_version_mixed_no_crash() -> None:
+    """Comparing numeric and alpha versions must not raise TypeError."""
+    assert _parse_version("1.0a") < _parse_version("1.0.1")
 
 
 # --- Version matching (CPE-based) ---
@@ -127,6 +132,30 @@ def test_version_no_match_with_cpe_data() -> None:
 def test_version_no_match_no_cpe() -> None:
     record = CVERecord(id="CVE-TEST", description="Vulnerability in nginx allows DoS")
     assert Fetcher._version_matches(record, "1.18.0") is False
+
+
+def test_version_product_substring_no_false_positive() -> None:
+    """'ssh' must NOT match CPE product 'openssh' (substring rejection)."""
+    record = CVERecord(
+        id="CVE-TEST", description="openssh vuln",
+        cpe_matches=[CPEMatch(
+            vendor="openbsd", product="openssh",
+            version_start_incl="7.0", version_end_excl="8.0",
+        )],
+    )
+    assert Fetcher._version_matches(record, "7.5", "ssh") is False
+
+
+def test_version_multi_word_product_match() -> None:
+    """'apache struts' should match vendor=apache product=struts."""
+    record = CVERecord(
+        id="CVE-TEST", description="struts vuln",
+        cpe_matches=[CPEMatch(
+            vendor="apache", product="struts",
+            version_start_incl="2.0", version_end_excl="3.0",
+        )],
+    )
+    assert Fetcher._version_matches(record, "2.3", "apache struts") is True
 
 
 # --- NVD response parsing ---

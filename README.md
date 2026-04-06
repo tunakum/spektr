@@ -14,7 +14,7 @@ Python, Typer, Rich, httpx, SQLite. No heavy frameworks, no cloud dependencies.
 
 ## What it does
 
-- Searches NVD for CVEs by software name/version
+- Searches NVD for CVEs by software name/version (CPE-based filtering)
 - Pulls EPSS exploit probability scores (batch, one request)
 - Checks CISA KEV catalog for known-exploited vulns
 - Combines everything into a single **spektr score** (0-10)
@@ -87,8 +87,8 @@ spektr clear-cache
 
   #   Severity    CVE ID              CVSS   EPSS%   KEV    Score
   1   CRITICAL    CVE-2021-44228      10.0   100.0   !!     10.0
-  2   CRITICAL    CVE-2021-45046       9.0   100.0    -      9.7
-  3   CRITICAL    CVE-2017-5645        9.8    99.9    -      9.9
+  2   CRITICAL    CVE-2017-5645        9.8    99.9    -      9.9
+  3   CRITICAL    CVE-2021-45046       9.0   100.0    -      9.7
   4   CRITICAL    CVE-2019-17571       9.8    97.2    -      9.6
   5   HIGH        CVE-2021-4104        7.5    98.6    -      8.9
 ```

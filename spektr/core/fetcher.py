@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 from rich.console import Console
 
+from spektr import __version__
 from spektr.core.cache import Cache, DEFAULT_QUERY_TTL
 
 console = Console(stderr=True)
@@ -22,23 +23,25 @@ NVD_RATE_LIMIT_DELAY = 6.0  # seconds between requests (5 req/30s without key)
 _VERSION_RE = re.compile(r"^(.+?)\s+([\d][\d.]*\S*)$")
 
 
-def _parse_version(v: str) -> tuple[int | str, ...]:
+def _parse_version(v: str) -> tuple[tuple[int, str], ...]:
     """Parse a version string into a comparable tuple.
 
-    Each segment is converted to int if possible, otherwise kept as str.
-    This allows correct comparison: "1.9.0" < "1.18.0".
+    Each segment becomes (int_value, str_value) so that numeric and
+    alphanumeric parts never compare directly (avoids TypeError).
+    Numeric segments sort before alpha at the same position.
     """
-    parts: list[int | str] = []
+    parts: list[tuple[int, str]] = []
     for segment in re.split(r"[.\-]", v):
-        # Split trailing letters: "1k" -> 1, "k"
+        if not segment:
+            continue
         m = re.match(r"^(\d+)([a-zA-Z].*)$", segment)
         if m:
-            parts.append(int(m.group(1)))
-            parts.append(m.group(2))
+            parts.append((int(m.group(1)), ""))
+            parts.append((-1, m.group(2)))  # alpha sorts before any numeric
         elif segment.isdigit():
-            parts.append(int(segment))
+            parts.append((int(segment), ""))
         else:
-            parts.append(segment)
+            parts.append((-1, segment))
     return tuple(parts)
 
 
@@ -153,7 +156,7 @@ def _parse_cve(item: dict[str, Any]) -> CVERecord:
                     continue
                 vendor = parts[3]
                 product = parts[4]
-                version_field = parts[5] if len(parts) > 5 else "*"
+                version_field = parts[5]
                 exact_ver = version_field if version_field not in ("*", "-") else None
 
                 cpe_matches.append(CPEMatch(
@@ -239,7 +242,7 @@ class Fetcher:
 
     def _build_headers(self) -> dict[str, str]:
         """Build request headers, including API key if available."""
-        headers: dict[str, str] = {"User-Agent": "spektr/0.1.0"}
+        headers: dict[str, str] = {"User-Agent": f"spektr/{__version__}"}
         if self._api_key:
             headers["apiKey"] = self._api_key
         return headers
@@ -258,13 +261,20 @@ class Fetcher:
     @staticmethod
     def _version_matches(record: CVERecord, version: str, product: str = "") -> bool:
         """Check if a CVE affects the given version using CPE data, with description fallback."""
-        product_lower = product.lower().replace(" ", "_")
+        product_lower = product.lower()
+        # Split into words for matching against CPE product field
+        # e.g. "apache struts" → ["apache", "struts"]
+        product_words = product_lower.split()
 
         # 1. CPE-based matching (structured, reliable)
         for cpe in record.cpe_matches:
-            # If we have a product name, check it matches the CPE product
-            if product_lower and product_lower not in cpe.product.lower():
-                continue
+            # If we have a product name, check all words appear as whole
+            # segments in the CPE vendor or product (separated by _)
+            if product_words:
+                cpe_text = f"{cpe.vendor}_{cpe.product}".lower()
+                cpe_parts = set(cpe_text.split("_"))
+                if not all(w in cpe_parts for w in product_words):
+                    continue
 
             # Exact version match in CPE URI
             if cpe.exact_version and cpe.exact_version == version:
@@ -304,17 +314,19 @@ class Fetcher:
         keyword: str,
         severity: str | None = None,
         limit: int = 20,
-    ) -> list[CVERecord]:
+    ) -> tuple[list[CVERecord], bool]:
         """Search NVD for CVEs matching a keyword.
 
         Intelligently splits 'software version' queries — searches NVD by
         software name, then filters results by version relevance.
+
+        Returns (records, from_cache).
         """
         cache_key = f"query:{keyword}:{severity}:{limit}"
         cached = self._cache.get(cache_key)
         if cached is not None:
             console.print("[dim]  Using cached results[/dim]")
-            return [_record_from_dict(r) for r in cached]
+            return [_record_from_dict(r) for r in cached], True
 
         search_term, version = self._parse_query(keyword)
 
@@ -339,21 +351,18 @@ class Fetcher:
                 )
                 self._last_request_time = time.time()
                 resp.raise_for_status()
-        except httpx.TimeoutException:
-            console.print("[bold red]  NVD API request timed out[/bold red]")
-            return []
         except httpx.HTTPStatusError as e:
             console.print(f"[bold red]  NVD API error: {e.response.status_code}[/bold red]")
-            return []
-        except httpx.ConnectError:
+            return [], False
+        except httpx.HTTPError:
             console.print("[bold red]  Could not connect to NVD API - check your network[/bold red]")
-            return []
+            return [], False
 
         try:
             data = resp.json()
         except ValueError:
             console.print("[bold red]  NVD API returned invalid data[/bold red]")
-            return []
+            return [], False
 
         vulnerabilities = data.get("vulnerabilities", [])
         records = [_parse_cve(item) for item in vulnerabilities]
@@ -361,12 +370,12 @@ class Fetcher:
         # Filter by version if specified
         if version:
             filtered = [r for r in records if self._version_matches(r, version, search_term)]
-            if len(filtered) < 3:
-                console.print(
-                    f"[dim]  Few exact version matches - showing all {search_term} CVEs[/dim]"
-                )
-            else:
+            if filtered:
                 records = filtered
+            else:
+                console.print(
+                    f"[dim]  No version-specific matches - showing all {search_term} CVEs[/dim]"
+                )
 
         records = records[:limit]
 
@@ -374,14 +383,17 @@ class Fetcher:
         cache_data = [_record_to_dict(r) for r in records]
         self._cache.set(cache_key, cache_data, DEFAULT_QUERY_TTL)
 
-        return records
+        return records, False
 
-    def get_cve(self, cve_id: str) -> CVERecord | None:
-        """Fetch a single CVE by its ID."""
+    def get_cve(self, cve_id: str) -> tuple[CVERecord | None, bool]:
+        """Fetch a single CVE by its ID.
+
+        Returns (record, from_cache).
+        """
         cache_key = f"cve:{cve_id}"
         cached = self._cache.get(cache_key)
         if cached is not None:
-            return _record_from_dict(cached)
+            return _record_from_dict(cached), True
 
         self._rate_limit_wait()
 
@@ -394,23 +406,26 @@ class Fetcher:
                 )
                 self._last_request_time = time.time()
                 resp.raise_for_status()
-        except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.ConnectError):
-            console.print(f"[bold red]  Failed to fetch {cve_id}[/bold red]")
-            return None
+        except httpx.HTTPStatusError as e:
+            console.print(f"[bold red]  NVD API error: {e.response.status_code} for {cve_id}[/bold red]")
+            return None, False
+        except httpx.HTTPError:
+            console.print(f"[bold red]  Failed to fetch {cve_id} - check your network[/bold red]")
+            return None, False
 
         try:
             data = resp.json()
         except ValueError:
             console.print(f"[bold red]  NVD returned invalid data for {cve_id}[/bold red]")
-            return None
+            return None, False
 
         vulnerabilities = data.get("vulnerabilities", [])
         if not vulnerabilities:
-            return None
+            return None, False
 
         record = _parse_cve(vulnerabilities[0])
 
         # Cache individual CVE for 24 hours
         self._cache.set(cache_key, _record_to_dict(record), 24 * 3600)
 
-        return record
+        return record, False
