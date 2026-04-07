@@ -10,13 +10,13 @@ runner = CliRunner()
 def test_version_flag() -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    assert "0.2.0" in result.output
 
 
 def test_version_short_flag() -> None:
     result = runner.invoke(app, ["-v"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    assert "0.2.0" in result.output
 
 
 def test_no_args_shows_help() -> None:
