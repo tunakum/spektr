@@ -42,6 +42,8 @@ def _parse_version(v: str) -> tuple[tuple[int, str], ...]:
             parts.append((int(segment), ""))
         else:
             parts.append((-1, segment))
+    if parts and parts[-1][1] == "":
+        parts.append((999999, ""))
     return tuple(parts)
 
 
@@ -200,7 +202,9 @@ def _record_from_dict(d: dict[str, Any]) -> CVERecord:
     """Deserialize a dict (from cache) into a CVERecord."""
     d = dict(d)  # shallow copy to avoid mutating cached data
     cpe_raw = d.pop("cpe_matches", [])
-    record = CVERecord(**d)
+    valid_fields = {f for f in CVERecord.__dataclass_fields__}
+    filtered = {k: v for k, v in d.items() if k in valid_fields}
+    record = CVERecord(**filtered)
     record.cpe_matches = [CPEMatch(**m) for m in cpe_raw]
     return record
 
@@ -235,7 +239,9 @@ class Fetcher:
 
     def _rate_limit_wait(self) -> None:
         """Respect NVD rate limits."""
-        delay = 2.0 if self._api_key else NVD_RATE_LIMIT_DELAY
+        has_key = (self._api_key.reveal() if hasattr(self._api_key, "reveal")
+                   else self._api_key) if self._api_key else None
+        delay = 2.0 if has_key else NVD_RATE_LIMIT_DELAY
         elapsed = time.time() - self._last_request_time
         if elapsed < delay:
             time.sleep(delay - elapsed)
@@ -244,7 +250,8 @@ class Fetcher:
         """Build request headers, including API key if available."""
         headers: dict[str, str] = {"User-Agent": f"spektr/{__version__}"}
         if self._api_key:
-            headers["apiKey"] = self._api_key
+            key = self._api_key.reveal() if hasattr(self._api_key, "reveal") else self._api_key
+            headers["apiKey"] = key
         return headers
 
     @staticmethod
@@ -253,6 +260,7 @@ class Fetcher:
 
         Returns (search_term, version_filter) — version may be None.
         """
+        keyword = keyword[:200]
         m = _VERSION_RE.match(keyword.strip())
         if m:
             return m.group(1).strip(), m.group(2).strip()
@@ -296,15 +304,19 @@ class Fetcher:
             ):
                 return True
 
+            # Wildcard CPE with no version constraints = all versions affected
+            if cpe.exact_version is None and not has_range:
+                return True
+
         # 2. Description fallback (for CVEs without CPE data)
         if not record.cpe_matches:
             desc_lower = record.description.lower()
-            if version in desc_lower:
+            if re.search(r'(?<!\d)' + re.escape(version) + r'(?!\d)', desc_lower):
                 return True
             parts = version.split(".")
             if len(parts) >= 2:
                 major_minor = ".".join(parts[:2])
-                if major_minor in desc_lower:
+                if re.search(r'(?<!\d)' + re.escape(major_minor) + r'(?!\d)', desc_lower):
                     return True
 
         return False
@@ -343,7 +355,7 @@ class Fetcher:
         self._rate_limit_wait()
 
         try:
-            with httpx.Client(timeout=NVD_TIMEOUT) as client:
+            with httpx.Client(timeout=NVD_TIMEOUT, verify=True) as client:
                 resp = client.get(
                     NVD_API_URL,
                     params=params,
@@ -364,8 +376,14 @@ class Fetcher:
             console.print("[bold red]  NVD API returned invalid data[/bold red]")
             return [], False
 
+        total_results = data.get("totalResults", 0)
         vulnerabilities = data.get("vulnerabilities", [])
         records = [_parse_cve(item) for item in vulnerabilities]
+
+        if total_results > len(vulnerabilities):
+            console.print(
+                f"[dim]  NVD returned {len(vulnerabilities)} of {total_results} total results[/dim]"
+            )
 
         # Filter by version if specified
         if version:
@@ -398,7 +416,7 @@ class Fetcher:
         self._rate_limit_wait()
 
         try:
-            with httpx.Client(timeout=NVD_TIMEOUT) as client:
+            with httpx.Client(timeout=NVD_TIMEOUT, verify=True) as client:
                 resp = client.get(
                     NVD_API_URL,
                     params={"cveId": cve_id},

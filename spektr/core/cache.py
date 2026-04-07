@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from spektr.config import _restrict_permissions
+
 
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "spektr"
 DEFAULT_QUERY_TTL = 6 * 3600  # 6 hours
@@ -20,7 +22,9 @@ class Cache:
     def __init__(self, db_path: Path | None = None) -> None:
         self._db_path = db_path or DEFAULT_CACHE_DIR / "cache.db"
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path))
+        self._conn = sqlite3.connect(str(self._db_path), timeout=30)
+        _restrict_permissions(self._db_path)
+        _restrict_permissions(self._db_path.parent)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._init_tables()
 

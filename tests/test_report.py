@@ -102,7 +102,8 @@ def test_generate_markdown_sorts_by_score() -> None:
     assert high_pos < low_pos
 
 
-def test_save_report_creates_file(tmp_path: Path) -> None:
+def test_save_report_creates_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
     records = [_make_record()]
     out = tmp_path / "report.md"
     path = save_report("log4j", records, str(out))
@@ -140,6 +141,7 @@ def test_save_report_overwrite_prompt_no(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_save_report_overwrite_prompt_yes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
     existing = tmp_path / "report.md"
     existing.write_text("old", encoding="utf-8")
     monkeypatch.setattr("builtins.input", lambda _: "y")

@@ -16,12 +16,17 @@ from rich.text import Text
 
 from spektr import __version__
 from spektr.core.fetcher import CVERecord
+from spektr.providers.base import TriageResult
 
 # Force UTF-8 output on Windows to avoid charmap encoding errors
 if sys.platform == "win32":
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-console = Console(force_terminal=True)
+console = Console()
 
 # Severity color map
 SEVERITY_STYLES: dict[str, str] = {
@@ -201,6 +206,53 @@ def print_error(message: str) -> None:
 def print_warning(message: str) -> None:
     """Print a warning message."""
     console.print(f"[yellow]  ! {message}[/yellow]")
+
+
+def print_triage(result: TriageResult, provider_name: str = "") -> None:
+    """Print AI triage results in a compact red-bordered panel."""
+    lines: list[str] = []
+
+    # Summary (max 2 sentences)
+    lines.append(f"[bold white]{result.summary}[/bold white]")
+    lines.append("")
+
+    # Priority (top 5, one line each with short reasoning)
+    for i, cve_id in enumerate(result.prioritized[:5], 1):
+        reason = result.reasoning.get(cve_id, "")
+        reason_text = f" [dim]— {reason}[/dim]" if reason else ""
+        lines.append(f"  {i}. [bold]{cve_id}[/bold]{reason_text}")
+    lines.append("")
+
+    # Attack path (max 2 sentences)
+    lines.append(f"[bold white]Attack path:[/bold white] {result.attack_path}")
+    lines.append("")
+
+    # Recommended actions (max 3)
+    for action in result.recommended_actions[:3]:
+        lines.append(f"  • {action}")
+
+    # Provider footer
+    if provider_name:
+        lines.append("")
+        lines.append(f"[dim]{provider_name}[/dim]")
+
+    panel = Panel(
+        "\n".join(lines),
+        title="[bold red]AI Triage[/bold red]",
+        border_style="red",
+        padding=(1, 2),
+    )
+    console.print(panel)
+
+
+def print_triage_warning(message: str) -> None:
+    """Print a yellow warning panel for triage issues."""
+    console.print(Panel(
+        f"[yellow]{message}[/yellow]",
+        border_style="yellow",
+        title="[yellow]Triage[/yellow]",
+        padding=(0, 2),
+    ))
 
 
 def print_footer(cached: bool = False) -> None:

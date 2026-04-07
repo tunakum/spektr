@@ -9,9 +9,11 @@ from spektr.core.cache import Cache
 
 
 @pytest.fixture()
-def cache(tmp_path: Path) -> Cache:
+def cache(tmp_path: Path):
     """Create a cache instance with a temporary database."""
-    return Cache(db_path=tmp_path / "test.db")
+    c = Cache(db_path=tmp_path / "test.db")
+    yield c
+    c.close()
 
 
 def test_set_and_get(cache: Cache) -> None:

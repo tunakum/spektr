@@ -45,27 +45,32 @@ class Scorer:
         if not uncached:
             return result
 
-        try:
-            with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
-                resp = client.get(EPSS_API_URL, params={"cve": ",".join(uncached)})
-                resp.raise_for_status()
-        except httpx.HTTPError:
-            console.print("[dim]  Could not fetch EPSS data - scoring without it[/dim]")
-            return result
+        EPSS_BATCH_SIZE = 100
+        for i in range(0, len(uncached), EPSS_BATCH_SIZE):
+            batch = uncached[i:i + EPSS_BATCH_SIZE]
+            try:
+                with httpx.Client(timeout=REQUEST_TIMEOUT, verify=True) as client:
+                    resp = client.get(EPSS_API_URL, params={"cve": ",".join(batch)})
+                    resp.raise_for_status()
+            except httpx.HTTPError:
+                console.print("[dim]  Could not fetch EPSS data - scoring without it[/dim]")
+                return result
 
-        try:
-            body = resp.json()
-        except ValueError:
-            console.print("[dim]  EPSS returned invalid data - scoring without it[/dim]")
-            return result
+            try:
+                body = resp.json()
+            except ValueError:
+                console.print("[dim]  EPSS returned invalid data - scoring without it[/dim]")
+                return result
 
-        for entry in body.get("data", []):
-            cid = entry.get("cve", "")
-            score = float(entry.get("epss", 0))
-            percentile = float(entry.get("percentile", 0))
-            result[cid] = (score, percentile)
-            # Cache per-CVE
-            self._cache.set(f"epss:{cid}", [score, percentile], DEFAULT_CVE_TTL)
+            for entry in body.get("data", []):
+                cid = entry.get("cve", "")
+                try:
+                    score = float(entry.get("epss", 0))
+                    percentile = float(entry.get("percentile", 0))
+                except (ValueError, TypeError):
+                    continue
+                result[cid] = (score, percentile)
+                self._cache.set(f"epss:{cid}", [score, percentile], DEFAULT_CVE_TTL)
 
         return result
 
@@ -78,7 +83,7 @@ class Scorer:
 
         headers = {"User-Agent": f"spektr/{__version__}"}
         try:
-            with httpx.Client(timeout=REQUEST_TIMEOUT, headers=headers) as client:
+            with httpx.Client(timeout=REQUEST_TIMEOUT, headers=headers, verify=True) as client:
                 resp = client.get(KEV_URL)
                 resp.raise_for_status()
         except httpx.HTTPError:
@@ -92,6 +97,9 @@ class Scorer:
             return set()
 
         kev_ids = [v.get("cveID", "") for v in data.get("vulnerabilities", [])]
+        if not kev_ids:
+            console.print("[dim]  KEV catalog returned 0 entries - data may be stale or schema changed[/dim]")
+            return set()
         self._cache.set(cache_key, kev_ids, DEFAULT_CVE_TTL)
         return set(kev_ids)
 
@@ -126,9 +134,10 @@ class Scorer:
             cvss = record.cvss_v3_score if record.cvss_v3_score is not None else 0.0
             epss_percentile = record.epss_percentile if record.epss_percentile is not None else 0.0
 
-            # normalize safety
+            # normalize safety — persist to record for correct display
             if epss_percentile > 1:
                 epss_percentile /= 100
+                record.epss_percentile = epss_percentile
             # non-linear EPSS
             epss_scaled = (epss_percentile ** 2) * 10  # 0–10
             # core score
@@ -137,7 +146,7 @@ class Scorer:
             if record.in_kev:
                 score *= 1.3
             # cap
-            score = min(score, 10)
+            score = max(0, min(score, 10))
 
             record.spektr_score = round(score, 1)
 

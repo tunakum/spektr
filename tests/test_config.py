@@ -20,7 +20,12 @@ def config_path(tmp_path: Path) -> Path:
 
 def test_load_missing_file_returns_defaults(config_path: Path) -> None:
     cfg = load_config(config_path)
-    assert cfg == DEFAULTS
+    # Secret keys are wrapped in MaskedStr — compare non-secret keys directly
+    for k, v in DEFAULTS.items():
+        if k in ("nvd_api_key", "groq_api_key"):
+            assert cfg[k].reveal() == v
+        else:
+            assert cfg[k] == v
 
 
 def test_save_and_load_roundtrip(config_path: Path) -> None:
@@ -30,7 +35,7 @@ def test_save_and_load_roundtrip(config_path: Path) -> None:
     assert loaded["limit"] == 50
     assert loaded["sort"] == "cvss"
     assert loaded["severity"] == "high"
-    assert loaded["nvd_api_key"] == "abc123"
+    assert loaded["nvd_api_key"].reveal() == "abc123"
 
 
 def test_save_creates_parent_dirs(tmp_path: Path) -> None:

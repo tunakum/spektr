@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 from typing import Optional
 
 import click
+import httpx
 import pyfiglet
 import typer
 from rich.console import Console
@@ -13,7 +16,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.text import Text
 
 from spektr import __version__
-from spektr.config import DEFAULTS, DESCRIPTIONS, load_config, get_value, set_value
+from spektr.config import DEFAULTS, DESCRIPTIONS, SECRET_KEYS, load_config, get_value, set_value
 from spektr.core.cache import Cache
 from spektr.core.fetcher import Fetcher
 from spektr.core.scorer import Scorer
@@ -24,7 +27,10 @@ from spektr.output.terminal import (
     print_error,
     print_footer,
     print_header,
+    print_triage,
+    print_triage_warning,
 )
+from spektr.providers import get_provider
 
 console = Console()
 
@@ -55,9 +61,11 @@ def _show_config(args: list[str]) -> None:
         for k in DEFAULTS:
             current = cfg.get(k, DEFAULTS[k])
             desc = DESCRIPTIONS.get(k, "")
-            display = current if current != "" else "[dim](not set)[/dim]"
-            if k == "nvd_api_key" and current:
-                display = current[:8] + "..." if len(str(current)) > 8 else current
+            if k in SECRET_KEYS:
+                has_val = current.reveal() if hasattr(current, "reveal") else current
+                display = f"[green]{current.masked_preview()}[/green]" if has_val else "[dim](not set)[/dim]"
+            else:
+                display = current if current != "" else "[dim](not set)[/dim]"
             console.print(f"  [bold]{k}[/bold] = {display}")
             console.print(f"  [dim]{desc}[/dim]\n")
         return
@@ -70,14 +78,24 @@ def _show_config(args: list[str]) -> None:
             console.print(f"\n[dim]  Available keys: {', '.join(DEFAULTS.keys())}[/dim]")
             return
         current = get_value(key)
-        console.print(f"  {key} = {current}")
+        if key in SECRET_KEYS:
+            has_val = current.reveal() if hasattr(current, "reveal") else current
+            display = current.masked_preview() if has_val else "(not set)"
+        else:
+            display = current
+        console.print(f"  {key} = {display}")
         return
 
     # Set value
     value = args[1]
     try:
         set_value(key, value)
-        console.print(f"[green]  {key} = {value}[/green]")
+        if key in SECRET_KEYS:
+            from spektr.config import MaskedStr
+            masked = MaskedStr(value)
+            console.print(f"[green]  {key} = {masked.masked_preview()}[/green]")
+        else:
+            console.print(f"[green]  {key} = {value}[/green]")
     except KeyError:
         print_error(f"Unknown config key: {key}")
         console.print(f"\n[dim]  Available keys: {', '.join(DEFAULTS.keys())}[/dim]")
@@ -102,7 +120,7 @@ CVE intelligence and triage CLI
 [bold red]Config:[/bold red]
   spektr --config                        Show current configuration
   spektr --config limit 50               Set default result limit
-  spektr --config nvd_api_key YOUR_KEY   Set NVD API key
+  spektr --config nvd_api_key YOUR_KEY   Set NVD API key (shows as ab12****ef56)
   spektr --config sort epss              Set default sort field
 
 [bold red]Manage:[/bold red]
@@ -114,6 +132,7 @@ CVE intelligence and triage CLI
   --sort           Sort by: spektr_score, cvss, epss, published
   --no-cache       Bypass cache for fresh results
   --output, -o     Export results to Markdown file
+  --raw            Show raw CVE table instead of AI triage
 
 [bold red]Scoring:[/bold red]
   spektr score = (0.35 × CVSS) + (0.65 × EPSS² × 10), capped at 10
@@ -142,7 +161,7 @@ class _SpektrGroup(typer.core.TyperGroup):
             cmd_name = click.utils.make_str(ctx._protected_args[0])
             if self.get_command(ctx, cmd_name) is None:
                 # Not a real subcommand → treat as a search query.
-                ctx.args = list(ctx._protected_args)
+                ctx.args = list(ctx._protected_args) + list(ctx.args)
                 ctx._protected_args = []
         return super().invoke(ctx)
 
@@ -200,6 +219,7 @@ def _do_search(
     sort: str = "spektr_score",
     no_cache: bool = False,
     output: str | None = None,
+    raw: bool = False,
 ) -> None:
     """Core search logic."""
     validated = _validate_query(target)
@@ -208,6 +228,17 @@ def _do_search(
         raise typer.Exit(1)
     target = validated
 
+    if severity is not None:
+        valid_severities = {"critical", "high", "medium", "low"}
+        if severity.lower() not in valid_severities:
+            print_error(f"Invalid severity '{severity}'. Choose from: critical, high, medium, low")
+            raise typer.Exit(1)
+
+    valid_sorts = {"spektr_score", "cvss", "epss", "published"}
+    if sort not in valid_sorts:
+        print_error(f"Invalid sort '{sort}'. Choose from: {', '.join(valid_sorts)}")
+        raise typer.Exit(1)
+
     if limit < 1:
         print_error("--limit must be at least 1")
         raise typer.Exit(1)
@@ -215,7 +246,8 @@ def _do_search(
         limit = 2000
 
     cfg = load_config()
-    api_key = cfg.get("nvd_api_key") or None
+    nvd_key = cfg.get("nvd_api_key")
+    api_key = nvd_key if (hasattr(nvd_key, "reveal") and nvd_key.reveal()) else None
 
     with Cache() as cache:
         if no_cache:
@@ -253,13 +285,59 @@ def _do_search(
             records = scorer.score(records)
 
     print_header(target, len(records), cached=from_cache)
+
+    # AI triage first, then table
+    triage_result = None
+    provider_name = ""
+    if not raw and bool(cfg.get("ai_provider")):
+        triage_result, provider_name = _run_triage(target, records)
+
     print_cve_table(records, sort_by=sort)
     print_footer(cached=from_cache)
 
     if output is not None:
         out_path = output if output != "" else None
-        path = save_report(target, records, out_path, sort_by=sort)
+        path = save_report(target, records, out_path, sort_by=sort,
+                           triage=triage_result, triage_provider=provider_name)
         console.print(f"\n[green]  Report saved to {path}[/green]")
+
+
+def _run_triage(
+    query: str, records: list, # list[CVERecord]
+) -> tuple:  # tuple[TriageResult | None, str]
+    """Run AI triage if configured. Returns (result, provider_name)."""
+    cfg = load_config()
+    provider = get_provider(cfg)
+
+    if provider is None:
+        print_triage_warning(
+            "AI triage not configured. Run: spektr --config ai_provider groq"
+        )
+        return None, ""
+
+    if not provider.is_available():
+        print_triage_warning(
+            f"AI provider '{cfg.get('ai_provider')}' is not available"
+        )
+        return None, ""
+
+    try:
+        with Progress(
+            SpinnerColumn(style="red"),
+            TextColumn("[bold white]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            progress.add_task("Running AI triage...", total=None)
+            result = provider.triage(query, records)
+        print_triage(result, provider_name=provider.name())
+        return result, provider.name()
+    except ValueError:
+        print_triage_warning("AI returned invalid response, skipping triage")
+        return None, ""
+    except (httpx.HTTPError, json.JSONDecodeError, KeyError):
+        print_triage_warning("AI triage timed out or failed")
+        return None, ""
 
 
 @app.callback(invoke_without_command=True)
@@ -292,6 +370,7 @@ def main(
     output: Optional[str] = typer.Option(
         None, "--output", "-o", help="Export results to Markdown file",
     ),
+    raw: bool = typer.Option(False, "--raw", help="Show raw CVE table instead of AI triage"),
 ) -> None:
     """spektr -- CVE intelligence and triage CLI."""
     # Real subcommands are handled by Click after this callback returns.
@@ -316,7 +395,8 @@ def main(
         cfg_sev = cfg.get("severity", "")
         severity = cfg_sev if cfg_sev else None
 
-    _do_search(target, severity=severity, limit=limit, sort=sort, no_cache=no_cache, output=output)
+    _do_search(target, severity=severity, limit=limit, sort=sort, no_cache=no_cache,
+               output=output, raw=raw)
 
 
 @app.command(name="clear-cache")
@@ -333,10 +413,16 @@ def cve(
     output: Optional[str] = typer.Option(
         None, "--output", "-o", help="Export results to Markdown file",
     ),
+    raw: bool = typer.Option(False, "--raw", help="Show raw detail instead of AI triage"),
 ) -> None:
     """Look up a specific CVE by ID."""
+    if not re.match(r"^CVE-\d{4}-\d{4,}$", cve_id, re.IGNORECASE):
+        print_error("Invalid CVE ID format. Expected CVE-YYYY-NNNNN")
+        raise typer.Exit(1)
+
     cfg = load_config()
-    api_key = cfg.get("nvd_api_key") or None
+    nvd_key = cfg.get("nvd_api_key")
+    api_key = nvd_key if (hasattr(nvd_key, "reveal") and nvd_key.reveal()) else None
 
     with Cache() as cache:
         fetcher = Fetcher(cache=cache, api_key=api_key)
@@ -357,10 +443,17 @@ def cve(
 
         records = scorer.score([record])
 
+    # AI triage first, then detail
+    triage_result = None
+    provider_name = ""
+    if not raw and bool(cfg.get("ai_provider")):
+        triage_result, provider_name = _run_triage(cve_id, records)
+
     print_cve_detail(records[0])
     print_footer(cached=from_cache)
 
     if output is not None:
         out_path = output if output != "" else None
-        path = save_report(cve_id, records, out_path, sort_by="spektr_score")
+        path = save_report(cve_id, records, out_path, sort_by="spektr_score",
+                           triage=triage_result, triage_provider=provider_name)
         console.print(f"\n[green]  Report saved to {path}[/green]")
