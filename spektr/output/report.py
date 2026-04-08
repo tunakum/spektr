@@ -3,29 +3,13 @@
 from __future__ import annotations
 
 import re
-from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlparse
 
 from spektr import __version__
 from spektr.core.fetcher import CVERecord
+from spektr.output.terminal import _limit_refs_per_domain
 from spektr.providers.base import TriageResult
-
-
-def _limit_refs_per_domain(refs: list[str], max_per_domain: int = 3) -> list[str]:
-    """Return refs with at most *max_per_domain* URLs per domain."""
-    domain_count: Counter[str] = Counter()
-    result: list[str] = []
-    for url in refs:
-        try:
-            domain = urlparse(url).netloc.lower()
-        except ValueError:
-            domain = url
-        domain_count[domain] += 1
-        if domain_count[domain] <= max_per_domain:
-            result.append(url)
-    return result
 
 
 def _auto_filename(query: str) -> str:

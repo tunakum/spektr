@@ -67,6 +67,11 @@ class Cache:
         self._conn.execute("DELETE FROM cache WHERE key = ?", (key,))
         self._conn.commit()
 
+    def invalidate_prefix(self, prefix: str) -> None:
+        """Remove all cache entries whose key starts with prefix."""
+        self._conn.execute("DELETE FROM cache WHERE key LIKE ?", (f"{prefix}%",))
+        self._conn.commit()
+
     def clear(self) -> None:
         """Remove all cache entries."""
         self._conn.execute("DELETE FROM cache")

@@ -18,7 +18,7 @@ from rich.text import Text
 from spektr import __version__
 from spektr.config import DEFAULTS, DESCRIPTIONS, SECRET_KEYS, load_config, get_value, set_value
 from spektr.core.cache import Cache
-from spektr.core.fetcher import Fetcher
+from spektr.core.fetcher import CVERecord, Fetcher, SpektrNetworkError
 from spektr.core.scorer import Scorer
 from spektr.output.report import save_report
 from spektr.output.terminal import (
@@ -31,6 +31,7 @@ from spektr.output.terminal import (
     print_triage_warning,
 )
 from spektr.providers import get_provider
+from spektr.providers.base import TriageResult
 
 console = Console()
 
@@ -252,18 +253,24 @@ def _do_search(
     with Cache() as cache:
         if no_cache:
             cache.invalidate(f"query:{target}:{severity}:{limit}")
+            cache.invalidate_prefix("epss:")
+            cache.invalidate_prefix("kev:")
 
         fetcher = Fetcher(cache=cache, api_key=api_key)
         scorer = Scorer(cache=cache)
 
-        with Progress(
-            SpinnerColumn(style="red"),
-            TextColumn("[bold white]{task.description}"),
-            console=console,
-            transient=True,
-        ) as progress:
-            progress.add_task("Fetching CVEs from NVD...", total=None)
-            records, from_cache = fetcher.search(keyword=target, severity=severity, limit=limit)
+        try:
+            with Progress(
+                SpinnerColumn(style="red"),
+                TextColumn("[bold white]{task.description}"),
+                console=console,
+                transient=True,
+            ) as progress:
+                progress.add_task("Fetching CVEs from NVD...", total=None)
+                records, from_cache = fetcher.search(keyword=target, severity=severity, limit=limit)
+        except SpektrNetworkError as e:
+            print_error(f"NVD API unreachable: {e}")
+            raise typer.Exit(1)
 
         if not records:
             print_error(f"No CVEs found for '{target}'")
@@ -303,8 +310,8 @@ def _do_search(
 
 
 def _run_triage(
-    query: str, records: list, # list[CVERecord]
-) -> tuple:  # tuple[TriageResult | None, str]
+    query: str, records: list[CVERecord],
+) -> tuple[TriageResult | None, str]:
     """Run AI triage if configured. Returns (result, provider_name)."""
     cfg = load_config()
     provider = get_provider(cfg)

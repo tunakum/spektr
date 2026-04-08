@@ -40,7 +40,7 @@ def test_parse_query_version_with_letter() -> None:
 # --- Version parsing ---
 
 def test_parse_version_numeric() -> None:
-    assert _parse_version("1.18.0") == ((1, ""), (18, ""), (0, ""), (999999, ""))
+    assert _parse_version("1.18.0") == ((1, ""), (18, ""), (0, ""))
 
 
 def test_parse_version_ordering() -> None:

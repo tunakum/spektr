@@ -24,7 +24,10 @@ class GroqProvider(LLMProvider):
         self._api_key = api_key
 
     def _build_headers(self) -> dict[str, str]:
-        key = self._api_key.reveal() if hasattr(self._api_key, "reveal") else self._api_key
+        try:
+            key = self._api_key.reveal() if hasattr(self._api_key, "reveal") else self._api_key
+        except Exception:
+            raise RuntimeError("Failed to build auth headers")
         return {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",

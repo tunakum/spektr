@@ -15,6 +15,10 @@ from spektr.core.cache import Cache, DEFAULT_QUERY_TTL
 
 console = Console(stderr=True)
 
+
+class SpektrNetworkError(Exception):
+    """Raised when an NVD API request fails due to network or HTTP errors."""
+
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 NVD_TIMEOUT = 30
 NVD_RATE_LIMIT_DELAY = 6.0  # seconds between requests (5 req/30s without key)
@@ -42,8 +46,6 @@ def _parse_version(v: str) -> tuple[tuple[int, str], ...]:
             parts.append((int(segment), ""))
         else:
             parts.append((-1, segment))
-    if parts and parts[-1][1] == "":
-        parts.append((999999, ""))
     return tuple(parts)
 
 
@@ -250,8 +252,11 @@ class Fetcher:
         """Build request headers, including API key if available."""
         headers: dict[str, str] = {"User-Agent": f"spektr/{__version__}"}
         if self._api_key:
-            key = self._api_key.reveal() if hasattr(self._api_key, "reveal") else self._api_key
-            headers["apiKey"] = key
+            try:
+                key = self._api_key.reveal() if hasattr(self._api_key, "reveal") else self._api_key
+                headers["apiKey"] = key
+            except Exception:
+                console.print("[bold red]  Failed to build auth headers[/bold red]")
         return headers
 
     @staticmethod
@@ -260,7 +265,9 @@ class Fetcher:
 
         Returns (search_term, version_filter) — version may be None.
         """
-        keyword = keyword[:200]
+        if len(keyword) > 200:
+            console.print("[yellow]  Query truncated to 200 characters[/yellow]")
+            keyword = keyword[:200]
         m = _VERSION_RE.match(keyword.strip())
         if m:
             return m.group(1).strip(), m.group(2).strip()
@@ -354,27 +361,30 @@ class Fetcher:
 
         self._rate_limit_wait()
 
-        try:
-            with httpx.Client(timeout=NVD_TIMEOUT, verify=True) as client:
-                resp = client.get(
-                    NVD_API_URL,
-                    params=params,
-                    headers=self._build_headers(),
-                )
-                self._last_request_time = time.time()
-                resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            console.print(f"[bold red]  NVD API error: {e.response.status_code}[/bold red]")
-            return [], False
-        except httpx.HTTPError:
-            console.print("[bold red]  Could not connect to NVD API - check your network[/bold red]")
-            return [], False
+        for attempt in range(2):
+            try:
+                with httpx.Client(timeout=NVD_TIMEOUT, verify=True) as client:
+                    resp = client.get(
+                        NVD_API_URL,
+                        params=params,
+                        headers=self._build_headers(),
+                    )
+                    self._last_request_time = time.time()
+                    resp.raise_for_status()
+                break
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt == 0:
+                    console.print("[dim]  Rate limited by NVD, retrying...[/dim]")
+                    time.sleep(NVD_RATE_LIMIT_DELAY)
+                    continue
+                raise SpektrNetworkError(f"NVD API error: {e.response.status_code}")
+            except httpx.HTTPError:
+                raise SpektrNetworkError("Could not connect to NVD API - check your network")
 
         try:
             data = resp.json()
         except ValueError:
-            console.print("[bold red]  NVD API returned invalid data[/bold red]")
-            return [], False
+            raise SpektrNetworkError("NVD API returned invalid data")
 
         total_results = data.get("totalResults", 0)
         vulnerabilities = data.get("vulnerabilities", [])
@@ -392,7 +402,7 @@ class Fetcher:
                 records = filtered
             else:
                 console.print(
-                    f"[dim]  No version-specific matches - showing all {search_term} CVEs[/dim]"
+                    f"[yellow]  No exact version matches for {version} — showing all {search_term} CVEs[/yellow]"
                 )
 
         records = records[:limit]

@@ -136,17 +136,17 @@ class Scorer:
 
             # normalize safety — persist to record for correct display
             if epss_percentile > 1:
+                console.print("[dim]  EPSS percentile >1 detected, normalizing[/dim]")
                 epss_percentile /= 100
                 record.epss_percentile = epss_percentile
             # non-linear EPSS
             epss_scaled = (epss_percentile ** 2) * 10  # 0–10
             # core score
             score = (0.35 * cvss) + (0.65 * epss_scaled)
-            # real-world exploitation boost
-            if record.in_kev:
-                score *= 1.3
-            # cap
+            # cap, then KEV boost, then cap again
             score = max(0, min(score, 10))
+            if record.in_kev:
+                score = min(score * 1.3, 10)
 
             record.spektr_score = round(score, 1)
 

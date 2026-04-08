@@ -44,9 +44,10 @@ def _expected_score(cvss: float = 0.0, epss_pct: float = 0.0, in_kev: bool = Fal
     """
     epss_scaled = (epss_pct ** 2) * 10
     score = (0.35 * cvss) + (0.65 * epss_scaled)
+    score = max(0, min(score, 10))
     if in_kev:
-        score *= 1.3
-    return round(min(score, 10), 1)
+        score = min(score * 1.3, 10)
+    return round(score, 1)
 
 
 def test_score_all_max() -> None:

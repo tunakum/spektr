@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import getpass
 import os
 import subprocess
 import sys
@@ -9,20 +10,28 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from rich.console import Console
+
+_perm_console = Console(stderr=True)
+
 
 def _restrict_permissions(path: Path) -> None:
     """Restrict file/directory to owner-only access, cross-platform."""
     if sys.platform == "win32":
         try:
+            user = getpass.getuser()
             subprocess.run(
-                ["icacls", str(path), "/inheritance:r", "/grant:r", f"{os.getlogin()}:(F)"],
-                capture_output=True, check=False,
+                ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:(F)"],
+                capture_output=True, check=True,
             )
         except Exception:
-            pass
+            _perm_console.print(f"[yellow]Warning: could not restrict permissions on {path}[/yellow]")
     else:
-        mode = 0o700 if path.is_dir() else 0o600
-        os.chmod(path, mode)
+        try:
+            mode = 0o700 if path.is_dir() else 0o600
+            os.chmod(path, mode)
+        except OSError:
+            _perm_console.print(f"[yellow]Warning: could not restrict permissions on {path}[/yellow]")
 
 
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "spektr"
@@ -176,6 +185,12 @@ def set_value(key: str, value: str, path: Path = DEFAULT_CONFIG_PATH) -> None:
             raise ValueError(f"limit must be between 1 and 2000, got {parsed}")
         cfg[key] = parsed
     else:
+        if key == "severity" and value and value.lower() not in {"critical", "high", "medium", "low"}:
+            raise ValueError(f"severity must be empty or one of: critical, high, medium, low")
+        if key == "sort" and value not in {"spektr_score", "cvss", "epss", "published"}:
+            raise ValueError(f"sort must be one of: spektr_score, cvss, epss, published")
+        if key == "ai_provider" and value and value.lower() not in {"groq"}:
+            raise ValueError(f"ai_provider must be empty or one of: groq")
         cfg[key] = value
 
     save_config(cfg, path)
