@@ -44,26 +44,26 @@ SYSTEM_PROMPT = (
     "- attack_path: exactly 2 sentences max\n"
     "- recommended_actions: exactly 3 items max\n\n"
     "Respond ONLY with valid JSON matching this exact schema:\n"
-    '{\n'
+    "{\n"
     '  "summary": "string (2 sentences max)",\n'
     '  "prioritized": ["CVE-ID", ...] (max 5),\n'
     '  "reasoning": {"CVE-ID": "max 8 words", ...},\n'
     '  "attack_path": "string (2 sentences max)",\n'
     '  "recommended_actions": ["string", ...] (max 3)\n'
-    '}\n'
+    "}\n"
     "No markdown, no explanation, just the JSON object."
 )
 
 
 def build_user_prompt(query: str, cves: list[CVERecord], max_cves: int = 10) -> str:
     """Format the user message with top CVEs for triage."""
-    query = re.sub(r'[\n\r\x00-\x1f]', ' ', query)[:200]
+    query = re.sub(r"[\n\r\x00-\x1f]", " ", query)[:200]
     top = sorted(cves, key=lambda r: r.spektr_score, reverse=True)[:max_cves]
     lines = [f"Target: {query}", f"CVEs to analyze (top {len(top)} by spektr score):"]
     for r in top:
         cvss = f"{r.cvss_v3_score:.1f}" if r.cvss_v3_score is not None else "N/A"
         epss = f"{r.epss_percentile * 100:.1f}" if r.epss_percentile is not None else "N/A"
-        desc = re.sub(r'[\n\r\x00-\x1f]', ' ', r.description[:200])
+        desc = re.sub(r"[\n\r\x00-\x1f]", " ", r.description[:200])
         lines.append(f"{r.id} | CVSS {cvss} | EPSS {epss}% | {desc}")
     return "\n".join(lines)
 

@@ -17,14 +17,18 @@ from spektr.providers.base import (
 )
 from spektr.providers.groq_provider import GroqProvider
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
-def _make_record(cve_id: str = "CVE-2021-44228", cvss: float = 10.0,
-                 epss_pct: float = 0.97, score: float = 9.8,
-                 desc: str = "Remote code execution in Log4j") -> CVERecord:
+
+def _make_record(
+    cve_id: str = "CVE-2021-44228",
+    cvss: float = 10.0,
+    epss_pct: float = 0.97,
+    score: float = 9.8,
+    desc: str = "Remote code execution in Log4j",
+) -> CVERecord:
     r = CVERecord(id=cve_id, description=desc)
     r.cvss_v3_score = cvss
     r.epss_percentile = epss_pct
@@ -32,21 +36,24 @@ def _make_record(cve_id: str = "CVE-2021-44228", cvss: float = 10.0,
     return r
 
 
-VALID_TRIAGE_JSON = json.dumps({
-    "summary": "Critical RCE via Log4j.",
-    "prioritized": ["CVE-2021-44228", "CVE-2021-45046"],
-    "reasoning": {
-        "CVE-2021-44228": "Actively exploited RCE with trivial exploitation.",
-        "CVE-2021-45046": "Bypass of initial Log4j fix.",
-    },
-    "attack_path": "Attacker sends crafted JNDI string in user input.",
-    "recommended_actions": ["Upgrade Log4j to 2.17.1", "Block outbound LDAP"],
-})
+VALID_TRIAGE_JSON = json.dumps(
+    {
+        "summary": "Critical RCE via Log4j.",
+        "prioritized": ["CVE-2021-44228", "CVE-2021-45046"],
+        "reasoning": {
+            "CVE-2021-44228": "Actively exploited RCE with trivial exploitation.",
+            "CVE-2021-45046": "Bypass of initial Log4j fix.",
+        },
+        "attack_path": "Attacker sends crafted JNDI string in user input.",
+        "recommended_actions": ["Upgrade Log4j to 2.17.1", "Block outbound LDAP"],
+    }
+)
 
 
 # ---------------------------------------------------------------------------
 # TriageResult dataclass
 # ---------------------------------------------------------------------------
+
 
 class TestTriageResult:
     def test_creation(self):
@@ -66,6 +73,7 @@ class TestTriageResult:
 # get_provider() factory
 # ---------------------------------------------------------------------------
 
+
 class TestGetProvider:
     def test_empty_provider_returns_none(self):
         assert get_provider({"ai_provider": ""}) is None
@@ -82,10 +90,10 @@ class TestGetProvider:
         assert "groq" in p.name()
 
 
-
 # ---------------------------------------------------------------------------
 # Prompt building
 # ---------------------------------------------------------------------------
+
 
 class TestBuildUserPrompt:
     def test_contains_target(self):
@@ -99,8 +107,7 @@ class TestBuildUserPrompt:
         assert "CVE-2021-44228" in prompt
 
     def test_caps_at_10(self):
-        records = [_make_record(cve_id=f"CVE-2021-{i:05d}", score=float(i))
-                   for i in range(20)]
+        records = [_make_record(cve_id=f"CVE-2021-{i:05d}", score=float(i)) for i in range(20)]
         prompt = build_user_prompt("test", records)
         # Should have exactly 10 CVE lines + 2 header lines
         lines = prompt.strip().split("\n")
@@ -117,6 +124,7 @@ class TestBuildUserPrompt:
 # ---------------------------------------------------------------------------
 # Response parsing
 # ---------------------------------------------------------------------------
+
 
 class TestParseTriageResponse:
     def test_valid_json(self):
@@ -148,6 +156,7 @@ class TestParseTriageResponse:
 # ---------------------------------------------------------------------------
 # Groq provider
 # ---------------------------------------------------------------------------
+
 
 class TestGroqProvider:
     def test_is_available_with_key(self):

@@ -115,4 +115,8 @@ def test_cve_invalid_id() -> None:
     """Fetching a garbage CVE ID should fail gracefully."""
     result = runner.invoke(app, ["cve", "NOT-A-CVE"])
     # Should exit with error, not crash
-    assert result.exit_code != 0 or "not found" in result.output.lower() or "error" in result.output.lower()
+    assert (
+        result.exit_code != 0
+        or "not found" in result.output.lower()
+        or "error" in result.output.lower()
+    )

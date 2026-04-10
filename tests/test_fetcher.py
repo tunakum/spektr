@@ -1,11 +1,9 @@
 """Tests for the NVD fetcher -- parsing, query splitting, version matching."""
 
-import pytest
-
 from spektr.core.fetcher import CPEMatch, CVERecord, Fetcher, _parse_cve, _parse_version
 
-
 # --- Query splitting ---
+
 
 def test_parse_query_with_version() -> None:
     name, version = Fetcher._parse_query("nginx 1.18.0")
@@ -39,6 +37,7 @@ def test_parse_query_version_with_letter() -> None:
 
 # --- Version parsing ---
 
+
 def test_parse_version_numeric() -> None:
     assert _parse_version("1.18.0") == ((1, ""), (18, ""), (0, ""))
 
@@ -58,14 +57,20 @@ def test_parse_version_mixed_no_crash() -> None:
 
 # --- Version matching (CPE-based) ---
 
+
 def test_version_matches_cpe_range() -> None:
     """Version in CPE range should match."""
     record = CVERecord(
-        id="CVE-TEST", description="nginx vuln",
-        cpe_matches=[CPEMatch(
-            vendor="f5", product="nginx",
-            version_start_incl="1.3.0", version_end_excl="1.5.0",
-        )],
+        id="CVE-TEST",
+        description="nginx vuln",
+        cpe_matches=[
+            CPEMatch(
+                vendor="f5",
+                product="nginx",
+                version_start_incl="1.3.0",
+                version_end_excl="1.5.0",
+            )
+        ],
     )
     assert Fetcher._version_matches(record, "1.4.0", "nginx") is True
 
@@ -73,11 +78,16 @@ def test_version_matches_cpe_range() -> None:
 def test_version_no_match_cpe_range() -> None:
     """Version outside CPE range should not match."""
     record = CVERecord(
-        id="CVE-TEST", description="nginx vuln",
-        cpe_matches=[CPEMatch(
-            vendor="f5", product="nginx",
-            version_start_incl="1.3.0", version_end_excl="1.5.0",
-        )],
+        id="CVE-TEST",
+        description="nginx vuln",
+        cpe_matches=[
+            CPEMatch(
+                vendor="f5",
+                product="nginx",
+                version_start_incl="1.3.0",
+                version_end_excl="1.5.0",
+            )
+        ],
     )
     assert Fetcher._version_matches(record, "1.5.0", "nginx") is False
 
@@ -85,10 +95,15 @@ def test_version_no_match_cpe_range() -> None:
 def test_version_matches_cpe_exact() -> None:
     """Exact version in CPE should match."""
     record = CVERecord(
-        id="CVE-TEST", description="nginx vuln",
-        cpe_matches=[CPEMatch(
-            vendor="f5", product="nginx", exact_version="1.4.0",
-        )],
+        id="CVE-TEST",
+        description="nginx vuln",
+        cpe_matches=[
+            CPEMatch(
+                vendor="f5",
+                product="nginx",
+                exact_version="1.4.0",
+            )
+        ],
     )
     assert Fetcher._version_matches(record, "1.4.0", "nginx") is True
 
@@ -96,11 +111,15 @@ def test_version_matches_cpe_exact() -> None:
 def test_version_matches_cpe_end_including() -> None:
     """Version at inclusive upper bound should match."""
     record = CVERecord(
-        id="CVE-TEST", description="nginx vuln",
-        cpe_matches=[CPEMatch(
-            vendor="f5", product="nginx",
-            version_end_incl="1.5.0",
-        )],
+        id="CVE-TEST",
+        description="nginx vuln",
+        cpe_matches=[
+            CPEMatch(
+                vendor="f5",
+                product="nginx",
+                version_end_incl="1.5.0",
+            )
+        ],
     )
     assert Fetcher._version_matches(record, "1.5.0", "nginx") is True
 
@@ -120,11 +139,16 @@ def test_version_matches_description_major_minor_fallback() -> None:
 def test_version_no_match_with_cpe_data() -> None:
     """When CPE data exists but doesn't match, description is NOT used as fallback."""
     record = CVERecord(
-        id="CVE-TEST", description="nginx 1.4.0 is mentioned here",
-        cpe_matches=[CPEMatch(
-            vendor="f5", product="nginx",
-            version_start_incl="2.0.0", version_end_excl="2.5.0",
-        )],
+        id="CVE-TEST",
+        description="nginx 1.4.0 is mentioned here",
+        cpe_matches=[
+            CPEMatch(
+                vendor="f5",
+                product="nginx",
+                version_start_incl="2.0.0",
+                version_end_excl="2.5.0",
+            )
+        ],
     )
     assert Fetcher._version_matches(record, "1.4.0", "nginx") is False
 
@@ -137,11 +161,16 @@ def test_version_no_match_no_cpe() -> None:
 def test_version_product_substring_no_false_positive() -> None:
     """'ssh' must NOT match CPE product 'openssh' (substring rejection)."""
     record = CVERecord(
-        id="CVE-TEST", description="openssh vuln",
-        cpe_matches=[CPEMatch(
-            vendor="openbsd", product="openssh",
-            version_start_incl="7.0", version_end_excl="8.0",
-        )],
+        id="CVE-TEST",
+        description="openssh vuln",
+        cpe_matches=[
+            CPEMatch(
+                vendor="openbsd",
+                product="openssh",
+                version_start_incl="7.0",
+                version_end_excl="8.0",
+            )
+        ],
     )
     assert Fetcher._version_matches(record, "7.5", "ssh") is False
 
@@ -149,11 +178,16 @@ def test_version_product_substring_no_false_positive() -> None:
 def test_version_multi_word_product_match() -> None:
     """'apache struts' should match vendor=apache product=struts."""
     record = CVERecord(
-        id="CVE-TEST", description="struts vuln",
-        cpe_matches=[CPEMatch(
-            vendor="apache", product="struts",
-            version_start_incl="2.0", version_end_excl="3.0",
-        )],
+        id="CVE-TEST",
+        description="struts vuln",
+        cpe_matches=[
+            CPEMatch(
+                vendor="apache",
+                product="struts",
+                version_start_incl="2.0",
+                version_end_excl="3.0",
+            )
+        ],
     )
     assert Fetcher._version_matches(record, "2.3", "apache struts") is True
 

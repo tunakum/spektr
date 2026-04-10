@@ -11,13 +11,14 @@ import httpx
 from rich.console import Console
 
 from spektr import __version__
-from spektr.core.cache import Cache, DEFAULT_QUERY_TTL
+from spektr.core.cache import DEFAULT_QUERY_TTL, Cache
 
 console = Console(stderr=True)
 
 
 class SpektrNetworkError(Exception):
     """Raised when an NVD API request fails due to network or HTTP errors."""
+
 
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 NVD_TIMEOUT = 30
@@ -65,9 +66,7 @@ def _version_in_range(
         return False
     if end_incl is not None and v > _parse_version(end_incl):
         return False
-    if end_excl is not None and v >= _parse_version(end_excl):
-        return False
-    return True
+    return not (end_excl is not None and v >= _parse_version(end_excl))
 
 
 @dataclass
@@ -163,15 +162,17 @@ def _parse_cve(item: dict[str, Any]) -> CVERecord:
                 version_field = parts[5]
                 exact_ver = version_field if version_field not in ("*", "-") else None
 
-                cpe_matches.append(CPEMatch(
-                    vendor=vendor,
-                    product=product,
-                    exact_version=exact_ver,
-                    version_start_incl=match.get("versionStartIncluding"),
-                    version_start_excl=match.get("versionStartExcluding"),
-                    version_end_incl=match.get("versionEndIncluding"),
-                    version_end_excl=match.get("versionEndExcluding"),
-                ))
+                cpe_matches.append(
+                    CPEMatch(
+                        vendor=vendor,
+                        product=product,
+                        exact_version=exact_ver,
+                        version_start_incl=match.get("versionStartIncluding"),
+                        version_start_excl=match.get("versionStartExcluding"),
+                        version_end_incl=match.get("versionEndIncluding"),
+                        version_end_excl=match.get("versionEndExcluding"),
+                    )
+                )
 
     return CVERecord(
         id=cve_id,
@@ -241,8 +242,11 @@ class Fetcher:
 
     def _rate_limit_wait(self) -> None:
         """Respect NVD rate limits."""
-        has_key = (self._api_key.reveal() if hasattr(self._api_key, "reveal")
-                   else self._api_key) if self._api_key else None
+        has_key = (
+            (self._api_key.reveal() if hasattr(self._api_key, "reveal") else self._api_key)
+            if self._api_key
+            else None
+        )
         delay = 2.0 if has_key else NVD_RATE_LIMIT_DELAY
         elapsed = time.time() - self._last_request_time
         if elapsed < delay:
@@ -296,12 +300,14 @@ class Fetcher:
                 return True
 
             # Range-based match
-            has_range = any([
-                cpe.version_start_incl,
-                cpe.version_start_excl,
-                cpe.version_end_incl,
-                cpe.version_end_excl,
-            ])
+            has_range = any(
+                [
+                    cpe.version_start_incl,
+                    cpe.version_start_excl,
+                    cpe.version_end_incl,
+                    cpe.version_end_excl,
+                ]
+            )
             if has_range and _version_in_range(
                 version,
                 cpe.version_start_incl,
@@ -318,12 +324,12 @@ class Fetcher:
         # 2. Description fallback (for CVEs without CPE data)
         if not record.cpe_matches:
             desc_lower = record.description.lower()
-            if re.search(r'(?<!\d)' + re.escape(version) + r'(?!\d)', desc_lower):
+            if re.search(r"(?<!\d)" + re.escape(version) + r"(?!\d)", desc_lower):
                 return True
             parts = version.split(".")
             if len(parts) >= 2:
                 major_minor = ".".join(parts[:2])
-                if re.search(r'(?<!\d)' + re.escape(major_minor) + r'(?!\d)', desc_lower):
+                if re.search(r"(?<!\d)" + re.escape(major_minor) + r"(?!\d)", desc_lower):
                     return True
 
         return False
@@ -377,14 +383,14 @@ class Fetcher:
                     console.print("[dim]  Rate limited by NVD, retrying...[/dim]")
                     time.sleep(NVD_RATE_LIMIT_DELAY)
                     continue
-                raise SpektrNetworkError(f"NVD API error: {e.response.status_code}")
-            except httpx.HTTPError:
-                raise SpektrNetworkError("Could not connect to NVD API - check your network")
+                raise SpektrNetworkError(f"NVD API error: {e.response.status_code}") from e
+            except httpx.HTTPError as e:
+                raise SpektrNetworkError("Could not connect to NVD API - check your network") from e
 
         try:
             data = resp.json()
-        except ValueError:
-            raise SpektrNetworkError("NVD API returned invalid data")
+        except ValueError as e:
+            raise SpektrNetworkError("NVD API returned invalid data") from e
 
         total_results = data.get("totalResults", 0)
         vulnerabilities = data.get("vulnerabilities", [])
@@ -402,7 +408,8 @@ class Fetcher:
                 records = filtered
             else:
                 console.print(
-                    f"[yellow]  No exact version matches for {version} — showing all {search_term} CVEs[/yellow]"
+                    f"[yellow]  No exact version matches for {version}"
+                    f" — showing all {search_term} CVEs[/yellow]"
                 )
 
         records = records[:limit]
@@ -435,7 +442,9 @@ class Fetcher:
                 self._last_request_time = time.time()
                 resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            console.print(f"[bold red]  NVD API error: {e.response.status_code} for {cve_id}[/bold red]")
+            console.print(
+                f"[bold red]  NVD API error: {e.response.status_code} for {cve_id}[/bold red]"
+            )
             return None, False
         except httpx.HTTPError:
             console.print(f"[bold red]  Failed to fetch {cve_id} - check your network[/bold red]")

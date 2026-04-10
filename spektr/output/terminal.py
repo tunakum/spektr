@@ -125,7 +125,9 @@ def print_cve_table(records: list[CVERecord], sort_by: str = "spektr_score") -> 
     for i, record in enumerate(sorted_records, 1):
         severity_badge = _severity_badge(record.cvss_v3_severity)
         cvss_str = f"{record.cvss_v3_score:.1f}" if record.cvss_v3_score is not None else "-"
-        epss_str = f"{record.epss_percentile * 100:.1f}" if record.epss_percentile is not None else "-"
+        epss_str = (
+            f"{record.epss_percentile * 100:.1f}" if record.epss_percentile is not None else "-"
+        )
         kev_str = Text("!!", style="bold red") if record.in_kev else Text("-", style="dim")
         score_str = Text(f"{record.spektr_score:.1f}", style=_score_color(record.spektr_score))
         desc = _truncate(record.description)
@@ -154,19 +156,22 @@ def print_cve_detail(record: CVERecord) -> None:
 
     if record.cvss_v3_score is not None:
         sev_style = SEVERITY_STYLES.get((record.cvss_v3_severity or "").upper(), "")
-        lines.append(f"  CVSS v3:   [{sev_style}]{record.cvss_v3_score:.1f} "
-                      f"({record.cvss_v3_severity})[/{sev_style}]")
+        lines.append(
+            f"  CVSS v3:   [{sev_style}]{record.cvss_v3_score:.1f} "
+            f"({record.cvss_v3_severity})[/{sev_style}]"
+        )
     if record.cvss_v3_vector:
         lines.append(f"  Vector:    [dim]{record.cvss_v3_vector}[/dim]")
     if record.epss_score is not None:
         pct = record.epss_percentile if record.epss_percentile is not None else 0
-        lines.append(f"  EPSS:      {record.epss_score:.4f} "
-                      f"(top {(1 - pct) * 100:.1f}%)")
+        lines.append(f"  EPSS:      {record.epss_score:.4f} (top {(1 - pct) * 100:.1f}%)")
     if record.in_kev:
         lines.append("  KEV:       [bold red]!! In CISA Known Exploited Vulnerabilities[/bold red]")
 
-    lines.append(f"  Score:     [{_score_color(record.spektr_score)}]"
-                  f"{record.spektr_score:.1f}/10.0[/{_score_color(record.spektr_score)}]")
+    lines.append(
+        f"  Score:     [{_score_color(record.spektr_score)}]"
+        f"{record.spektr_score:.1f}/10.0[/{_score_color(record.spektr_score)}]"
+    )
     lines.append("")
 
     if record.cwe_ids:
@@ -195,12 +200,14 @@ def print_cve_detail(record: CVERecord) -> None:
 
 def print_error(message: str) -> None:
     """Print an error panel."""
-    console.print(Panel(
-        f"[bold red]{message}[/bold red]",
-        border_style="red",
-        title="[bold red]Error[/bold red]",
-        padding=(0, 2),
-    ))
+    console.print(
+        Panel(
+            f"[bold red]{message}[/bold red]",
+            border_style="red",
+            title="[bold red]Error[/bold red]",
+            padding=(0, 2),
+        )
+    )
 
 
 def print_warning(message: str) -> None:
@@ -247,12 +254,14 @@ def print_triage(result: TriageResult, provider_name: str = "") -> None:
 
 def print_triage_warning(message: str) -> None:
     """Print a yellow warning panel for triage issues."""
-    console.print(Panel(
-        f"[yellow]{message}[/yellow]",
-        border_style="yellow",
-        title="[yellow]Triage[/yellow]",
-        padding=(0, 2),
-    ))
+    console.print(
+        Panel(
+            f"[yellow]{message}[/yellow]",
+            border_style="yellow",
+            title="[yellow]Triage[/yellow]",
+            padding=(0, 2),
+        )
+    )
 
 
 def print_footer(cached: bool = False) -> None:

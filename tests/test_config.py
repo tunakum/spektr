@@ -6,9 +6,9 @@ import pytest
 
 from spektr.config import (
     DEFAULTS,
+    get_value,
     load_config,
     save_config,
-    get_value,
     set_value,
 )
 
@@ -45,7 +45,7 @@ def test_save_creates_parent_dirs(tmp_path: Path) -> None:
 
 
 def test_partial_config_fills_defaults(config_path: Path) -> None:
-    config_path.write_text('limit = 100\n', encoding="utf-8")
+    config_path.write_text("limit = 100\n", encoding="utf-8")
     cfg = load_config(config_path)
     assert cfg["limit"] == 100
     assert cfg["sort"] == DEFAULTS["sort"]
@@ -58,7 +58,7 @@ def test_get_value_default(config_path: Path) -> None:
 
 
 def test_get_value_from_file(config_path: Path) -> None:
-    config_path.write_text('limit = 42\n', encoding="utf-8")
+    config_path.write_text("limit = 42\n", encoding="utf-8")
     val = get_value("limit", config_path)
     assert val == 42
 

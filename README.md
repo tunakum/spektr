@@ -1,12 +1,13 @@
 # spektr
 
+![CI](https://github.com/tunakum/spektr/actions/workflows/ci.yml/badge.svg)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License: MIT](https://img.shields.io/github/license/tunakum/spektr)
 ![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows%20%7C%20macos-lightgrey)
 
-CVE intelligence CLI. Fetches vulnerabilities from NVD, scores them using CVSS + EPSS + KEV data, and ranks results so you see what actually matters first.
+CVE intelligence CLI with AI triage. Fetches vulnerabilities from NVD, scores them using CVSS + EPSS + KEV data, ranks results, and runs AI-powered risk analysis via Groq — all from the terminal.
 
-No paid APIs. Cached results work offline. Built for pentesters and security folks who want fast answers from the terminal.
+No paid APIs. Cached results work offline. Built for pentesters and security folks who want fast answers.
 
 ## Tech stack
 
@@ -136,7 +137,6 @@ That's it. AI triage now runs on every search automatically. Use `--raw` to skip
 
 - Nmap XML parsing for batch scanning
 - HTML report export
-- GitHub Actions CI (ruff + pytest)
 
 ## Built with
 

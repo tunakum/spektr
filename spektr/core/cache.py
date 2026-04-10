@@ -10,10 +10,9 @@ from typing import Any
 
 from spektr.config import _restrict_permissions
 
-
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "spektr"
 DEFAULT_QUERY_TTL = 6 * 3600  # 6 hours
-DEFAULT_CVE_TTL = 24 * 3600   # 24 hours
+DEFAULT_CVE_TTL = 24 * 3600  # 24 hours
 
 
 class Cache:
@@ -42,9 +41,7 @@ class Cache:
 
     def get(self, key: str) -> Any | None:
         """Return cached data if present and not expired, else None."""
-        row = self._conn.execute(
-            "SELECT data, ts, ttl FROM cache WHERE key = ?", (key,)
-        ).fetchone()
+        row = self._conn.execute("SELECT data, ts, ttl FROM cache WHERE key = ?", (key,)).fetchone()
         if row is None:
             return None
         data, ts, ttl = row

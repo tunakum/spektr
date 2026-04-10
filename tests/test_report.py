@@ -118,7 +118,9 @@ def test_generate_markdown_no_cvss() -> None:
     assert "CVSS v3" not in md
 
 
-def test_save_report_auto_generates_filename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_save_report_auto_generates_filename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     records = [_make_record()]
     path = save_report("log4j", records)

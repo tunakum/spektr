@@ -22,16 +22,21 @@ def _restrict_permissions(path: Path) -> None:
             user = getpass.getuser()
             subprocess.run(
                 ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:(F)"],
-                capture_output=True, check=True,
+                capture_output=True,
+                check=True,
             )
         except Exception:
-            _perm_console.print(f"[yellow]Warning: could not restrict permissions on {path}[/yellow]")
+            _perm_console.print(
+                f"[yellow]Warning: could not restrict permissions on {path}[/yellow]"
+            )
     else:
         try:
             mode = 0o700 if path.is_dir() else 0o600
             os.chmod(path, mode)
         except OSError:
-            _perm_console.print(f"[yellow]Warning: could not restrict permissions on {path}[/yellow]")
+            _perm_console.print(
+                f"[yellow]Warning: could not restrict permissions on {path}[/yellow]"
+            )
 
 
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "spektr"
@@ -84,6 +89,7 @@ class MaskedStr:
     def reveal(self) -> str:
         """Return the actual value — only call when sending to an API."""
         return self._secret
+
 
 # Default values for all config keys
 DEFAULTS: dict[str, Any] = {
@@ -145,14 +151,22 @@ def save_config(data: dict[str, Any], path: Path = DEFAULT_CONFIG_PATH) -> None:
         if isinstance(value, MaskedStr):
             value = value.reveal()
         if isinstance(value, str):
-            escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "").replace("\r", "")
+            escaped = (
+                value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "").replace("\r", "")
+            )
             lines.append(f'{key} = "{escaped}"')
         elif isinstance(value, bool):
             lines.append(f"{key} = {'true' if value else 'false'}")
         elif isinstance(value, int):
             lines.append(f"{key} = {value}")
         else:
-            escaped = str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "").replace("\r", "")
+            escaped = (
+                str(value)
+                .replace("\\", "\\\\")
+                .replace('"', '\\"')
+                .replace("\n", "")
+                .replace("\r", "")
+            )
             lines.append(f'{key} = "{escaped}"')
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     _restrict_permissions(path)
@@ -179,18 +193,22 @@ def set_value(key: str, value: str, path: Path = DEFAULT_CONFIG_PATH) -> None:
     if isinstance(default, int):
         try:
             parsed = int(value)
-        except ValueError:
-            raise ValueError(f"Expected an integer for '{key}', got '{value}'")
+        except ValueError as e:
+            raise ValueError(f"Expected an integer for '{key}', got '{value}'") from e
         if key == "limit" and (parsed < 1 or parsed > 2000):
             raise ValueError(f"limit must be between 1 and 2000, got {parsed}")
         cfg[key] = parsed
     else:
-        if key == "severity" and value and value.lower() not in {"critical", "high", "medium", "low"}:
-            raise ValueError(f"severity must be empty or one of: critical, high, medium, low")
+        if (
+            key == "severity"
+            and value
+            and value.lower() not in {"critical", "high", "medium", "low"}
+        ):
+            raise ValueError("severity must be empty or one of: critical, high, medium, low")
         if key == "sort" and value not in {"spektr_score", "cvss", "epss", "published"}:
-            raise ValueError(f"sort must be one of: spektr_score, cvss, epss, published")
+            raise ValueError("sort must be one of: spektr_score, cvss, epss, published")
         if key == "ai_provider" and value and value.lower() not in {"groq"}:
-            raise ValueError(f"ai_provider must be empty or one of: groq")
+            raise ValueError("ai_provider must be empty or one of: groq")
         cfg[key] = value
 
     save_config(cfg, path)

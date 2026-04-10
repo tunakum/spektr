@@ -17,11 +17,15 @@ def get_provider(cfg: dict[str, Any]) -> LLMProvider | None:
         if not raw_key:
             return None
         from spektr.providers.groq_provider import GroqProvider
+
         return GroqProvider(api_key=api_key)  # passes MaskedStr through
 
     if provider:
         from rich.console import Console
-        Console(stderr=True).print(f"[yellow]  Unknown AI provider '{provider}'. Available: groq[/yellow]")
+
+        Console(stderr=True).print(
+            f"[yellow]  Unknown AI provider '{provider}'. Available: groq[/yellow]"
+        )
 
     return None
 

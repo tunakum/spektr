@@ -143,8 +143,9 @@ def save_report(
     triage_provider: str = "",
 ) -> Path:
     """Generate and save a Markdown report to disk."""
-    content = generate_markdown(query, records, sort_by, triage=triage,
-                                triage_provider=triage_provider)
+    content = generate_markdown(
+        query, records, sort_by, triage=triage, triage_provider=triage_provider
+    )
 
     if output_path is None:
         # No path given -- auto-generate
@@ -153,11 +154,9 @@ def save_report(
         path = Path(output_path).resolve()
         try:
             path.relative_to(Path.cwd().resolve())
-        except ValueError:
-            raise ValueError(
-                f"Output path must be within the current directory. "
-                f"Got: {path}"
-            )
+        except ValueError as e:
+            msg = f"Output path must be within the current directory. Got: {path}"
+            raise ValueError(msg) from e
         original_dir = path.parent
         # Auto-append .md if no extension given
         if not path.suffix:

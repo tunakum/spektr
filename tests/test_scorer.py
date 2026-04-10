@@ -1,13 +1,13 @@
 """Tests for the scoring engine -- formula correctness, edge cases."""
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from spektr.core.cache import Cache
 from spektr.core.fetcher import CVERecord
 from spektr.core.scorer import Scorer
-from spektr.core.cache import Cache
-from pathlib import Path
 
 
 @pytest.fixture()
@@ -36,13 +36,14 @@ def _make_record(
 
 # --- Formula tests (manually set fields, bypass network) ---
 
+
 def _expected_score(cvss: float = 0.0, epss_pct: float = 0.0, in_kev: bool = False) -> float:
     """Compute expected spektr score using the current formula.
 
     Formula: (0.35 * cvss) + (0.65 * epss_percentile² * 10)
     If KEV: score * 1.3, capped at 10.
     """
-    epss_scaled = (epss_pct ** 2) * 10
+    epss_scaled = (epss_pct**2) * 10
     score = (0.35 * cvss) + (0.65 * epss_scaled)
     score = max(0, min(score, 10))
     if in_kev:
@@ -109,8 +110,10 @@ def test_scorer_enriches_records(scorer: Scorer) -> None:
         _make_record("CVE-A", cvss=9.0),
         _make_record("CVE-B", cvss=3.0),
     ]
-    with patch.object(scorer, '_fetch_epss_batch', return_value={}), \
-         patch.object(scorer, '_load_kev_set', return_value=set()):
+    with (
+        patch.object(scorer, "_fetch_epss_batch", return_value={}),
+        patch.object(scorer, "_load_kev_set", return_value=set()),
+    ):
         result = scorer.score(records)
     assert len(result) == 2
     # Both should have a score set (even if EPSS/KEV unavailable)

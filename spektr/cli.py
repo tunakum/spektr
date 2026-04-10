@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 import sys
-from typing import Optional
 
 import click
 import httpx
@@ -16,7 +15,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.text import Text
 
 from spektr import __version__
-from spektr.config import DEFAULTS, DESCRIPTIONS, SECRET_KEYS, load_config, get_value, set_value
+from spektr.config import DEFAULTS, DESCRIPTIONS, SECRET_KEYS, get_value, load_config, set_value
 from spektr.core.cache import Cache
 from spektr.core.fetcher import CVERecord, Fetcher, SpektrNetworkError
 from spektr.core.scorer import Scorer
@@ -64,7 +63,11 @@ def _show_config(args: list[str]) -> None:
             desc = DESCRIPTIONS.get(k, "")
             if k in SECRET_KEYS:
                 has_val = current.reveal() if hasattr(current, "reveal") else current
-                display = f"[green]{current.masked_preview()}[/green]" if has_val else "[dim](not set)[/dim]"
+                display = (
+                    f"[green]{current.masked_preview()}[/green]"
+                    if has_val
+                    else "[dim](not set)[/dim]"
+                )
             else:
                 display = current if current != "" else "[dim](not set)[/dim]"
             console.print(f"  [bold]{k}[/bold] = {display}")
@@ -93,6 +96,7 @@ def _show_config(args: list[str]) -> None:
         set_value(key, value)
         if key in SECRET_KEYS:
             from spektr.config import MaskedStr
+
             masked = MaskedStr(value)
             console.print(f"[green]  {key} = {masked.masked_preview()}[/green]")
         else:
@@ -139,12 +143,13 @@ CVE intelligence and triage CLI
   spektr score = (0.35 × CVSS) + (0.65 × EPSS² × 10), capped at 10
   If in CISA KEV: score × 1.3
 
-  EPSS is non-linear — a CVE at 90th percentile scores much higher than one 
+  EPSS is non-linear — a CVE at 90th percentile scores much higher than one
   at 45th percentile. KEV adds a 30% boost on top
 
 [bold red]Config file:[/bold red]
   ~/.config/spektr/config.toml
 """
+
 
 class _SpektrGroup(typer.core.TyperGroup):
     """Custom group that treats unrecognised tokens as search queries.
@@ -198,7 +203,7 @@ def _config_callback(value: bool) -> None:
             idx = sys.argv.index("--config")
         except ValueError:
             idx = len(sys.argv)
-        args = sys.argv[idx + 1:]
+        args = sys.argv[idx + 1 :]
         _show_config(args)
         raise typer.Exit()
 
@@ -270,7 +275,7 @@ def _do_search(
                 records, from_cache = fetcher.search(keyword=target, severity=severity, limit=limit)
         except SpektrNetworkError as e:
             print_error(f"NVD API unreachable: {e}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
 
         if not records:
             print_error(f"No CVEs found for '{target}'")
@@ -304,28 +309,31 @@ def _do_search(
 
     if output is not None:
         out_path = output if output != "" else None
-        path = save_report(target, records, out_path, sort_by=sort,
-                           triage=triage_result, triage_provider=provider_name)
+        path = save_report(
+            target,
+            records,
+            out_path,
+            sort_by=sort,
+            triage=triage_result,
+            triage_provider=provider_name,
+        )
         console.print(f"\n[green]  Report saved to {path}[/green]")
 
 
 def _run_triage(
-    query: str, records: list[CVERecord],
+    query: str,
+    records: list[CVERecord],
 ) -> tuple[TriageResult | None, str]:
     """Run AI triage if configured. Returns (result, provider_name)."""
     cfg = load_config()
     provider = get_provider(cfg)
 
     if provider is None:
-        print_triage_warning(
-            "AI triage not configured. Run: spektr --config ai_provider groq"
-        )
+        print_triage_warning("AI triage not configured. Run: spektr --config ai_provider groq")
         return None, ""
 
     if not provider.is_available():
-        print_triage_warning(
-            f"AI provider '{cfg.get('ai_provider')}' is not available"
-        )
+        print_triage_warning(f"AI provider '{cfg.get('ai_provider')}' is not available")
         return None, ""
 
     try:
@@ -350,32 +358,52 @@ def _run_triage(
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    version: Optional[bool] = typer.Option(
-        None, "--version", "-v", help="Show version and exit.",
-        callback=_version_callback, is_eager=True,
+    version: bool | None = typer.Option(
+        None,
+        "--version",
+        "-v",
+        help="Show version and exit.",
+        callback=_version_callback,
+        is_eager=True,
     ),
-    help_flag: Optional[bool] = typer.Option(
-        None, "--help", "-h", help="Show this help and exit.",
-        callback=_help_callback, is_eager=True,
+    help_flag: bool | None = typer.Option(
+        None,
+        "--help",
+        "-h",
+        help="Show this help and exit.",
+        callback=_help_callback,
+        is_eager=True,
     ),
-    config_flag: Optional[bool] = typer.Option(
-        None, "--config", help="View or set configuration.",
-        callback=_config_callback, is_eager=True,
+    config_flag: bool | None = typer.Option(
+        None,
+        "--config",
+        help="View or set configuration.",
+        callback=_config_callback,
+        is_eager=True,
     ),
-    severity: Optional[str] = typer.Option(
-        None, "--severity", "-s",
+    severity: str | None = typer.Option(
+        None,
+        "--severity",
+        "-s",
         help="Filter by severity: critical, high, medium, low",
     ),
-    limit: Optional[int] = typer.Option(
-        None, "--limit", "-l", help="Max results to return",
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        "-l",
+        help="Max results to return",
     ),
-    sort: Optional[str] = typer.Option(
-        None, "--sort",
+    sort: str | None = typer.Option(
+        None,
+        "--sort",
         help="Sort by: spektr_score, cvss, epss, published",
     ),
     no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache for fresh results"),
-    output: Optional[str] = typer.Option(
-        None, "--output", "-o", help="Export results to Markdown file",
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Export results to Markdown file",
     ),
     raw: bool = typer.Option(False, "--raw", help="Show raw CVE table instead of AI triage"),
 ) -> None:
@@ -402,8 +430,9 @@ def main(
         cfg_sev = cfg.get("severity", "")
         severity = cfg_sev if cfg_sev else None
 
-    _do_search(target, severity=severity, limit=limit, sort=sort, no_cache=no_cache,
-               output=output, raw=raw)
+    _do_search(
+        target, severity=severity, limit=limit, sort=sort, no_cache=no_cache, output=output, raw=raw
+    )
 
 
 @app.command(name="clear-cache")
@@ -417,8 +446,11 @@ def clear_cache() -> None:
 @app.command()
 def cve(
     cve_id: str = typer.Argument(..., help="CVE ID, e.g. CVE-2021-44228"),
-    output: Optional[str] = typer.Option(
-        None, "--output", "-o", help="Export results to Markdown file",
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Export results to Markdown file",
     ),
     raw: bool = typer.Option(False, "--raw", help="Show raw detail instead of AI triage"),
 ) -> None:
@@ -461,6 +493,12 @@ def cve(
 
     if output is not None:
         out_path = output if output != "" else None
-        path = save_report(cve_id, records, out_path, sort_by="spektr_score",
-                           triage=triage_result, triage_provider=provider_name)
+        path = save_report(
+            cve_id,
+            records,
+            out_path,
+            sort_by="spektr_score",
+            triage=triage_result,
+            triage_provider=provider_name,
+        )
         console.print(f"\n[green]  Report saved to {path}[/green]")

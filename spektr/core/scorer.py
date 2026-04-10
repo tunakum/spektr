@@ -6,7 +6,7 @@ import httpx
 from rich.console import Console
 
 from spektr import __version__
-from spektr.core.cache import Cache, DEFAULT_CVE_TTL
+from spektr.core.cache import DEFAULT_CVE_TTL, Cache
 from spektr.core.fetcher import CVERecord
 
 console = Console(stderr=True)
@@ -45,9 +45,9 @@ class Scorer:
         if not uncached:
             return result
 
-        EPSS_BATCH_SIZE = 100
-        for i in range(0, len(uncached), EPSS_BATCH_SIZE):
-            batch = uncached[i:i + EPSS_BATCH_SIZE]
+        epss_batch_size = 100
+        for i in range(0, len(uncached), epss_batch_size):
+            batch = uncached[i : i + epss_batch_size]
             try:
                 with httpx.Client(timeout=REQUEST_TIMEOUT, verify=True) as client:
                     resp = client.get(EPSS_API_URL, params={"cve": ",".join(batch)})
@@ -98,7 +98,9 @@ class Scorer:
 
         kev_ids = [v.get("cveID", "") for v in data.get("vulnerabilities", [])]
         if not kev_ids:
-            console.print("[dim]  KEV catalog returned 0 entries - data may be stale or schema changed[/dim]")
+            console.print(
+                "[dim]  KEV catalog returned 0 entries - data may be stale or schema changed[/dim]"
+            )
             return set()
         self._cache.set(cache_key, kev_ids, DEFAULT_CVE_TTL)
         return set(kev_ids)
@@ -140,7 +142,7 @@ class Scorer:
                 epss_percentile /= 100
                 record.epss_percentile = epss_percentile
             # non-linear EPSS
-            epss_scaled = (epss_percentile ** 2) * 10  # 0–10
+            epss_scaled = (epss_percentile**2) * 10  # 0–10
             # core score
             score = (0.35 * cvss) + (0.65 * epss_scaled)
             # cap, then KEV boost, then cap again
