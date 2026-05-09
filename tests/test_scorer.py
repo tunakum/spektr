@@ -40,14 +40,13 @@ def _make_record(
 def _expected_score(cvss: float = 0.0, epss_pct: float = 0.0, in_kev: bool = False) -> float:
     """Compute expected spektr score using the current formula.
 
-    Formula: (0.35 * cvss) + (0.65 * epss_percentile² * 10)
-    If KEV: score * 1.3, capped at 10.
+    Formula (bounded [0,10] by construction):
+        0.50 * cvss + 0.30 * (epss_percentile² * 10) + 2.0 if KEV
     """
     epss_scaled = (epss_pct**2) * 10
-    score = (0.35 * cvss) + (0.65 * epss_scaled)
-    score = max(0, min(score, 10))
+    score = 0.50 * cvss + 0.30 * epss_scaled
     if in_kev:
-        score = min(score * 1.3, 10)
+        score += 2.0
     return round(score, 1)
 
 
@@ -66,36 +65,64 @@ def test_score_all_zero() -> None:
 def test_score_cvss_only() -> None:
     """Only CVSS score, no EPSS or KEV."""
     expected = _expected_score(cvss=7.5, epss_pct=0.0, in_kev=False)
-    # 0.35 * 7.5 = 2.625 → 2.6
-    assert expected == 2.6
+    # 0.50 * 7.5 = 3.75 → 3.8
+    assert expected == 3.8
 
 
 def test_score_epss_only() -> None:
     """Only EPSS percentile, no CVSS or KEV."""
     expected = _expected_score(cvss=0.0, epss_pct=0.95, in_kev=False)
-    # 0.65 * (0.95^2 * 10) = 0.65 * 9.025 = 5.86625 → 5.9
-    assert expected == 5.9
+    # 0.30 * (0.95^2 * 10) = 0.30 * 9.025 = 2.7075 → 2.7
+    assert expected == 2.7
 
 
 def test_score_kev_boost() -> None:
-    """KEV multiplies score by 1.3."""
+    """KEV adds a fixed +2.0, gap is constant."""
     base = _expected_score(cvss=5.0, epss_pct=0.5, in_kev=False)
     boosted = _expected_score(cvss=5.0, epss_pct=0.5, in_kev=True)
-    assert boosted == round(min(base * 1.3, 10), 1)
+    assert round(boosted - base, 1) == 2.0
+
+
+def test_score_kev_gap_constant_at_top() -> None:
+    """KEV gap stays 2.0 even for high-severity inputs (no saturation cliff)."""
+    base = _expected_score(cvss=9.8, epss_pct=0.95, in_kev=False)
+    boosted = _expected_score(cvss=9.8, epss_pct=0.95, in_kev=True)
+    assert round(boosted - base, 1) == 2.0
 
 
 def test_score_realistic_critical() -> None:
-    """Realistic critical CVE: high CVSS, high EPSS, in KEV."""
+    """Realistic critical CVE: high CVSS, high EPSS, in KEV.
+
+    log4shell-class: 0.50*9.8 + 0.30*(0.97²·10) + 2.0
+                   = 4.9 + 2.823 + 2.0 = 9.72 → 9.7
+    """
     expected = _expected_score(cvss=9.8, epss_pct=0.97, in_kev=True)
-    # (0.35*9.8) + (0.65*0.9409*10) = 3.43 + 6.116 = 9.546 * 1.3 = 12.41 → capped 10
-    assert expected == 10.0
+    assert expected == 9.7
 
 
 def test_score_realistic_low() -> None:
-    """Low-risk CVE: low CVSS, low EPSS, not in KEV."""
+    """Low-risk CVE: low CVSS, low EPSS, not in KEV.
+
+    0.50*3.1 + 0.30*(0.05²·10) = 1.55 + 0.0075 = 1.56 → 1.6
+    """
     expected = _expected_score(cvss=3.1, epss_pct=0.05, in_kev=False)
-    # (0.35*3.1) + (0.65*0.0025*10) = 1.085 + 0.01625 = 1.10125 → 1.1
-    assert expected == 1.1
+    assert expected == 1.6
+
+
+def test_score_bounded_at_ten() -> None:
+    """Max inputs hit 10 exactly (5 + 3 + 2)."""
+    expected = _expected_score(cvss=10.0, epss_pct=1.0, in_kev=True)
+    assert expected == 10.0
+
+
+def test_score_low_cvss_kev_does_not_inflate() -> None:
+    """POODLE-class (low CVSS + KEV + high EPSS) stays mid-tier, not near-max.
+
+    Old formula gave 9.2; new should reflect actual blast radius.
+    """
+    expected = _expected_score(cvss=3.4, epss_pct=0.95, in_kev=True)
+    # 0.50*3.4 + 0.30*9.025 + 2.0 = 1.7 + 2.71 + 2.0 = 6.41 → 6.4
+    assert expected == 6.4
 
 
 def test_scorer_handles_empty_list(scorer: Scorer) -> None:

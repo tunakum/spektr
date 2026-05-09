@@ -120,6 +120,47 @@ def _load_raw(path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
         return tomllib.load(f)
 
 
+_VALID_SORTS = {"spektr_score", "cvss", "epss", "published"}
+_VALID_SEVERITIES = {"", "critical", "high", "medium", "low"}
+_VALID_AI_PROVIDERS = {"", "groq"}
+
+
+def _validate_loaded(merged: dict[str, Any]) -> None:
+    """Validate values from disk (TOML may have been hand-edited).
+
+    Invalid values fall back to defaults with a stderr warning.
+    """
+    limit = merged.get("limit")
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1 or limit > 2000:
+        _perm_console.print(
+            f"[yellow]Warning: invalid 'limit' in config ({limit!r}), "
+            f"using default {DEFAULTS['limit']}[/yellow]"
+        )
+        merged["limit"] = DEFAULTS["limit"]
+
+    sort = merged.get("sort")
+    if not isinstance(sort, str) or sort not in _VALID_SORTS:
+        _perm_console.print(
+            f"[yellow]Warning: invalid 'sort' in config ({sort!r}), "
+            f"using default {DEFAULTS['sort']!r}[/yellow]"
+        )
+        merged["sort"] = DEFAULTS["sort"]
+
+    sev = merged.get("severity", "")
+    if not isinstance(sev, str) or sev.lower() not in _VALID_SEVERITIES:
+        _perm_console.print(
+            f"[yellow]Warning: invalid 'severity' in config ({sev!r}), ignoring[/yellow]"
+        )
+        merged["severity"] = ""
+
+    prov = merged.get("ai_provider", "")
+    if not isinstance(prov, str) or prov.lower() not in _VALID_AI_PROVIDERS:
+        _perm_console.print(
+            f"[yellow]Warning: invalid 'ai_provider' in config ({prov!r}), ignoring[/yellow]"
+        )
+        merged["ai_provider"] = ""
+
+
 def load_config(path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     """Load config with defaults applied for missing keys.
 
@@ -131,6 +172,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     for key in DEFAULTS:
         if key in raw:
             merged[key] = raw[key]
+    _validate_loaded(merged)
     # Wrap secrets
     for key in SECRET_KEYS:
         val = merged.get(key, "")

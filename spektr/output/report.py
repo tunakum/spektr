@@ -8,6 +8,7 @@ from pathlib import Path
 
 from spektr import __version__
 from spektr.core.fetcher import CVERecord
+from spektr.core.nmap_parser import NmapHost
 from spektr.output.terminal import _limit_refs_per_domain
 from spektr.providers.base import TriageResult
 
@@ -24,7 +25,7 @@ def _severity_label(severity: str | None) -> str:
     """Return severity with markdown emphasis."""
     label = (severity or "N/A").upper()
     if label == "CRITICAL":
-        return f"**{label}**"
+        return f"***{label}***"
     if label == "HIGH":
         return f"**{label}**"
     return label
@@ -157,13 +158,13 @@ def save_report(
         except ValueError as e:
             msg = f"Output path must be within the current directory. Got: {path}"
             raise ValueError(msg) from e
-        original_dir = path.parent
         # Auto-append .md if no extension given
         if not path.suffix:
             path = path.with_suffix(".md")
         # Don't overwrite directories
         if path.is_dir():
             path = path / _auto_filename(query)
+        original_dir = path.parent
         # Prompt before overwriting existing files
         if path.exists():
             try:
@@ -173,6 +174,148 @@ def save_report(
             if answer != "y":
                 path = original_dir / _auto_filename(query)
                 # Ensure fallback filename is unique
+                base = path.stem
+                suffix = path.suffix
+                counter = 2
+                while path.exists():
+                    path = original_dir / f"{base}_{counter}{suffix}"
+                    counter += 1
+
+    if path.exists() and path.is_symlink():
+        raise ValueError(f"Refusing to write through symlink: {path}")
+
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def _scan_auto_filename(xml_file: str) -> str:
+    stem = Path(xml_file).stem or "scan"
+    safe = re.sub(r"[^\w\-]", "_", stem.lower()).strip("_") or "scan"
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    return f"scan_{safe}_{ts}.md"
+
+
+def generate_scan_markdown(
+    xml_file: str,
+    hosts: list[NmapHost],
+    results: dict[str, list[CVERecord]],
+    sort_by: str = "spektr_score",
+    include_unversioned: bool = False,
+) -> str:
+    """Combined Markdown report for an nmap scan."""
+    sort_keys = {
+        "spektr_score": lambda r: r.spektr_score,
+        "cvss": lambda r: r.cvss_v3_score or 0,
+        "epss": lambda r: r.epss_percentile if r.epss_percentile is not None else 0,
+        "published": lambda r: r.published,
+    }
+    key_fn = sort_keys.get(sort_by, sort_keys["spektr_score"])
+
+    total_services = sum(
+        1 for h in hosts for s in h.services if include_unversioned or s.has_version
+    )
+    total_cves = sum(len(v) for v in results.values())
+
+    lines: list[str] = []
+    lines.append(f"# spektr scan report: {Path(xml_file).name}")
+    lines.append("")
+    lines.append(
+        f"**{len(hosts)} hosts** | **{total_services} services** | "
+        f"**{total_cves} total CVEs** | sorted by {sort_by}"
+    )
+    lines.append("")
+
+    # Top-level summary table across all hosts
+    lines.append("## Summary")
+    lines.append("")
+    lines.append("| Host | Port | Service | CVEs | Top CVE | Score |")
+    lines.append("|------|------|---------|------|---------|-------|")
+    for host in hosts:
+        for svc in host.services:
+            if not include_unversioned and not svc.has_version:
+                continue
+            recs = results.get(svc.query.lower(), [])
+            top = max(recs, key=lambda r: r.spektr_score) if recs else None
+            top_id = top.id if top else "-"
+            top_score = f"{top.spektr_score:.1f}" if top else "-"
+            lines.append(
+                f"| {host.label} | {svc.port}/{svc.proto} | {svc.query} "
+                f"| {len(recs)} | {top_id} | {top_score} |"
+            )
+    lines.append("")
+
+    # Per-host detail
+    for host in hosts:
+        host_services = [s for s in host.services if include_unversioned or s.has_version]
+        if not host_services:
+            continue
+
+        lines.append(f"## {host.label}")
+        lines.append("")
+
+        for svc in host_services:
+            recs = results.get(svc.query.lower(), [])
+            lines.append(f"### {svc.port}/{svc.proto} — {svc.query}")
+            lines.append("")
+            if not recs:
+                lines.append("_No CVEs found._")
+                lines.append("")
+                continue
+
+            sorted_recs = sorted(recs, key=key_fn, reverse=True)
+            lines.append("| Severity | CVE ID | CVSS | EPSS% | KEV | Score |")
+            lines.append("|----------|--------|------|-------|-----|-------|")
+            for r in sorted_recs:
+                sev = _severity_label(r.cvss_v3_severity)
+                cvss = f"{r.cvss_v3_score:.1f}" if r.cvss_v3_score is not None else "-"
+                epss = f"{r.epss_percentile * 100:.1f}" if r.epss_percentile is not None else "-"
+                kev = "!!" if r.in_kev else "-"
+                lines.append(f"| {sev} | {r.id} | {cvss} | {epss} | {kev} | {r.spektr_score:.1f} |")
+            lines.append("")
+
+    lines.append("---")
+    lines.append(
+        f"*Generated by spektr v{__version__} | Source: {Path(xml_file).name} "
+        f"| Data: NVD API v2 + EPSS + KEV*"
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def save_scan_report(
+    xml_file: str,
+    hosts: list[NmapHost],
+    results: dict[str, list[CVERecord]],
+    output_path: str | None = None,
+    sort_by: str = "spektr_score",
+    include_unversioned: bool = False,
+) -> Path:
+    """Save combined scan Markdown report to disk."""
+    content = generate_scan_markdown(
+        xml_file, hosts, results, sort_by=sort_by, include_unversioned=include_unversioned
+    )
+
+    if output_path is None:
+        path = Path(_scan_auto_filename(xml_file))
+    else:
+        path = Path(output_path).resolve()
+        try:
+            path.relative_to(Path.cwd().resolve())
+        except ValueError as e:
+            msg = f"Output path must be within the current directory. Got: {path}"
+            raise ValueError(msg) from e
+        if not path.suffix:
+            path = path.with_suffix(".md")
+        if path.is_dir():
+            path = path / _scan_auto_filename(xml_file)
+        original_dir = path.parent
+        if path.exists():
+            try:
+                answer = input(f"  '{path.name}' already exists. Overwrite? [y/N] ").strip().lower()
+            except EOFError:
+                answer = "n"
+            if answer != "y":
+                path = original_dir / _scan_auto_filename(xml_file)
                 base = path.stem
                 suffix = path.suffix
                 counter = 2

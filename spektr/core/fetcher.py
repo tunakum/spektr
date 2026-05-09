@@ -318,7 +318,8 @@ class Fetcher:
                 return True
 
             # Wildcard CPE with no version constraints = all versions affected
-            if cpe.exact_version is None and not has_range:
+            # But only if the product filter matched (skip if no product given)
+            if cpe.exact_version is None and not has_range and product_words:
                 return True
 
         # 2. Description fallback (for CVEs without CPE data)
@@ -367,6 +368,7 @@ class Fetcher:
 
         self._rate_limit_wait()
 
+        resp = None
         for attempt in range(2):
             try:
                 with httpx.Client(timeout=NVD_TIMEOUT, verify=True) as client:
@@ -386,6 +388,9 @@ class Fetcher:
                 raise SpektrNetworkError(f"NVD API error: {e.response.status_code}") from e
             except httpx.HTTPError as e:
                 raise SpektrNetworkError("Could not connect to NVD API - check your network") from e
+
+        if resp is None:
+            raise SpektrNetworkError("NVD API request failed without response")
 
         try:
             data = resp.json()

@@ -210,11 +210,6 @@ def print_error(message: str) -> None:
     )
 
 
-def print_warning(message: str) -> None:
-    """Print a warning message."""
-    console.print(f"[yellow]  ! {message}[/yellow]")
-
-
 def print_triage(result: TriageResult, provider_name: str = "") -> None:
     """Print AI triage results in a compact red-bordered panel."""
     lines: list[str] = []

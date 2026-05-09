@@ -87,29 +87,23 @@ spektr clear-cache
 
 ## Example output
 
-```
-+---------------------------------- spektr -----------------------------------+
-|                                                                             |
-|  log4j                                                                      |
-|                                                                             |
-+--------------------------- 10 CVEs found  (live) ---------------------------+
-
-  #   Severity    CVE ID              CVSS   EPSS%   KEV    Score
-  1   CRITICAL    CVE-2021-44228      10.0   100.0   !!     10.0
-  2   CRITICAL    CVE-2017-5645        9.8    99.9    -      9.9
-  3   CRITICAL    CVE-2021-45046       9.0   100.0    -      9.7
-  4   CRITICAL    CVE-2019-17571       9.8    97.2    -      9.6
-  5   HIGH        CVE-2021-4104        7.5    98.6    -      8.9
-```
+![spektr](assets/spektr.svg)
 
 ## Scoring
 
 ```
-spektr score = (0.35 × CVSS) + (0.65 × EPSS²×10), capped at 10
-If in CISA KEV: score × 1.3
+spektr_score = 0.50 × CVSS                       (severity anchor, max 5)
+             + 0.30 × (EPSS_percentile² × 10)    (exploit prediction, max 3)
+             + 2.0 × KEV_flag                    (confirmed exploitation, +2 if in CISA KEV)
 ```
 
-EPSS is non-linear — a CVE at 90th percentile scores much higher than one at 45th percentile, even though it's only 2× the raw value. KEV adds a 30% boost on top.
+**Bounded [0, 10] by construction** — no cap branch, no saturation cliff. The 5+3+2 weighting decomposes intent:
+
+- **CVSS (50%)** anchors severity. A low-CVSS CVE cannot inflate to near-max via EPSS hype.
+- **EPSS² (30%)** stays non-linear and selective — a CVE at 95th percentile contributes ~3.6× more than one at 50th. This is the spektr signature: predicted exploitation matters, but not at the expense of severity context.
+- **KEV (+2.0 fixed)** is additive, not multiplicative. The KEV gap between two otherwise-identical CVEs is *always* exactly 2.0 — never collapses at the top, never explodes at the bottom.
+
+Practical implication: **a score of 10 means confirmed-exploited + max severity + max prediction**. A score of 8 means severe + actively predicted, but no in-the-wild evidence yet. An 8 today can become a 10 tomorrow when KEV catches up — the formula is stable as data populates.
 
 ## AI Triage
 
@@ -133,10 +127,20 @@ That's it. AI triage now runs on every search automatically. Use `--raw` to skip
 - Output order: header → AI triage panel → CVE table → footer
 - API keys are stored in `~/.config/spektr/config.toml` and never appear in output (masked as `gsk_****hhmG`)
 
-## Roadmap
+## Batch scanning (nmap)
 
-- Nmap XML parsing for batch scanning
-- HTML report export
+Run nmap with version detection and feed the XML to spektr:
+
+```bash
+nmap -sV -oX scan.xml 10.0.0.0/24
+spektr scan scan.xml
+spektr scan scan.xml -o report.md
+```
+
+- Parses every `open` port with a detected `product` + `version`
+- De-duplicates identical services across hosts (one CVE lookup, reused)
+- Skips versionless services by default — pass `--include-unversioned` to scan anyway
+- Per-host summary table in the terminal; combined Markdown report on `--output`
 
 ## Built with
 

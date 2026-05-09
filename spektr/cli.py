@@ -18,8 +18,9 @@ from spektr import __version__
 from spektr.config import DEFAULTS, DESCRIPTIONS, SECRET_KEYS, get_value, load_config, set_value
 from spektr.core.cache import Cache
 from spektr.core.fetcher import CVERecord, Fetcher, SpektrNetworkError
+from spektr.core.nmap_parser import NmapHost, NmapParseError, dedupe_services, parse_nmap_xml
 from spektr.core.scorer import Scorer
-from spektr.output.report import save_report
+from spektr.output.report import save_report, save_scan_report
 from spektr.output.terminal import (
     print_cve_detail,
     print_cve_table,
@@ -122,6 +123,10 @@ CVE intelligence and triage CLI
   spektr cve CVE-2021-44228              Full detail on a single CVE
   spektr cve CVE-2021-44228 -o report    Export single CVE to Markdown
 
+[bold red]Scan:[/bold red]
+  spektr scan results.xml                Batch-scan nmap XML for CVEs
+  spektr scan results.xml -o report.md   Export combined Markdown report
+
 [bold red]Config:[/bold red]
   spektr --config                        Show current configuration
   spektr --config limit 50               Set default result limit
@@ -140,11 +145,12 @@ CVE intelligence and triage CLI
   --raw            Show raw CVE table instead of AI triage
 
 [bold red]Scoring:[/bold red]
-  spektr score = (0.35 × CVSS) + (0.65 × EPSS² × 10), capped at 10
-  If in CISA KEV: score × 1.3
+  spektr_score = 0.50 × CVSS                    (severity, max 5)
+               + 0.30 × (EPSS_pct² × 10)        (exploit prediction, max 3)
+               + 2.0 × KEV_flag                 (confirmed exploitation, +2)
 
-  EPSS is non-linear — a CVE at 90th percentile scores much higher than one
-  at 45th percentile. KEV adds a 30% boost on top
+  Bounded [0, 10] by construction. KEV gap is always exactly +2.0,
+  never collapses at the top.
 
 [bold red]Config file:[/bold red]
   ~/.config/spektr/config.toml
@@ -249,6 +255,7 @@ def _do_search(
         print_error("--limit must be at least 1")
         raise typer.Exit(1)
     if limit > 2000:
+        console.print("[yellow]  Limit capped at 2000 (NVD API maximum)[/yellow]")
         limit = 2000
 
     cfg = load_config()
@@ -453,6 +460,7 @@ def cve(
         help="Export results to Markdown file",
     ),
     raw: bool = typer.Option(False, "--raw", help="Show raw detail instead of AI triage"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache for fresh results"),
 ) -> None:
     """Look up a specific CVE by ID."""
     if not re.match(r"^CVE-\d{4}-\d{4,}$", cve_id, re.IGNORECASE):
@@ -464,6 +472,10 @@ def cve(
     api_key = nvd_key if (hasattr(nvd_key, "reveal") and nvd_key.reveal()) else None
 
     with Cache() as cache:
+        if no_cache:
+            cache.invalidate(f"cve:{cve_id}")
+            cache.invalidate_prefix("epss:")
+            cache.invalidate_prefix("kev:")
         fetcher = Fetcher(cache=cache, api_key=api_key)
         scorer = Scorer(cache=cache)
 
@@ -502,3 +514,143 @@ def cve(
             triage_provider=provider_name,
         )
         console.print(f"\n[green]  Report saved to {path}[/green]")
+
+
+@app.command()
+def scan(
+    xml_file: str = typer.Argument(..., help="nmap XML file (run nmap with -sV -oX scan.xml)"),
+    severity: str | None = typer.Option(None, "--severity", "-s", help="Filter by severity"),
+    limit: int = typer.Option(10, "--limit", "-l", help="Max CVEs per service"),
+    sort: str = typer.Option("spektr_score", "--sort", help="Sort CVEs within each service"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache"),
+    output: str | None = typer.Option(
+        None, "--output", "-o", help="Export combined Markdown report"
+    ),
+    include_unversioned: bool = typer.Option(
+        False,
+        "--include-unversioned",
+        help="Also scan services without a detected version (noisy)",
+    ),
+) -> None:
+    """Batch-scan an nmap XML file for CVEs across all detected services."""
+    try:
+        hosts = parse_nmap_xml(xml_file)
+    except NmapParseError as e:
+        print_error(str(e))
+        raise typer.Exit(1) from None
+
+    if not hosts:
+        print_error("No live hosts with services found in scan")
+        raise typer.Exit(1)
+
+    services = dedupe_services(hosts)
+    if not include_unversioned:
+        services = [s for s in services if s.has_version]
+
+    if not services:
+        print_error(
+            "No services with detected versions. Re-run nmap with -sV, "
+            "or pass --include-unversioned to scan anyway."
+        )
+        raise typer.Exit(1)
+
+    valid_sorts = {"spektr_score", "cvss", "epss", "published"}
+    if sort not in valid_sorts:
+        print_error(f"Invalid sort '{sort}'. Choose from: {', '.join(valid_sorts)}")
+        raise typer.Exit(1)
+    if severity is not None:
+        valid_sev = {"critical", "high", "medium", "low"}
+        if severity.lower() not in valid_sev:
+            print_error(f"Invalid severity '{severity}'")
+            raise typer.Exit(1)
+
+    cfg = load_config()
+    nvd_key = cfg.get("nvd_api_key")
+    api_key = nvd_key if (hasattr(nvd_key, "reveal") and nvd_key.reveal()) else None
+
+    total_hosts = len({s.host for s in services})
+    console.print(
+        f"\n[bold red]nmap scan:[/bold red] {len(services)} unique services across "
+        f"{total_hosts} host(s)\n"
+    )
+
+    results: dict[str, list[CVERecord]] = {}
+    with Cache() as cache:
+        if no_cache:
+            cache.invalidate_prefix("query:")
+            cache.invalidate_prefix("epss:")
+            cache.invalidate_prefix("kev:")
+
+        fetcher = Fetcher(cache=cache, api_key=api_key)
+        scorer = Scorer(cache=cache)
+
+        for i, svc in enumerate(services, 1):
+            query = svc.query
+            console.print(f"[dim]  [{i}/{len(services)}] {svc.host}:{svc.port} → {query}[/dim]")
+            try:
+                records, _ = fetcher.search(keyword=query, severity=severity, limit=limit)
+            except SpektrNetworkError as e:
+                print_error(f"NVD unreachable: {e}")
+                raise typer.Exit(1) from None
+            if records:
+                records = scorer.score(records)
+            results[query.lower()] = records
+
+    _print_scan_summary(hosts, results, include_unversioned=include_unversioned)
+
+    if output is not None:
+        out_path = output if output != "" else None
+        path = save_scan_report(
+            xml_file,
+            hosts,
+            results,
+            output_path=out_path,
+            sort_by=sort,
+            include_unversioned=include_unversioned,
+        )
+        console.print(f"\n[green]  Report saved to {path}[/green]")
+
+
+def _print_scan_summary(
+    hosts: list[NmapHost],
+    results: dict[str, list[CVERecord]],
+    include_unversioned: bool = False,
+) -> None:
+    """Per-host summary: top CVEs per service."""
+    from rich.table import Table
+
+    for host in hosts:
+        table = Table(
+            title=f"[bold red]{host.label}[/bold red]",
+            title_justify="left",
+            show_header=True,
+            header_style="bold white",
+            border_style="dim",
+        )
+        table.add_column("Port", style="cyan", no_wrap=True)
+        table.add_column("Service", style="white")
+        table.add_column("CVEs", justify="right")
+        table.add_column("Top CVE", style="yellow")
+        table.add_column("Score", justify="right")
+
+        any_row = False
+        for svc in host.services:
+            if not include_unversioned and not svc.has_version:
+                continue
+            recs = results.get(svc.query.lower(), [])
+            top = max(recs, key=lambda r: r.spektr_score) if recs else None
+            top_id = top.id if top else "-"
+            top_score = f"{top.spektr_score:.1f}" if top else "-"
+            label = svc.query
+            table.add_row(
+                f"{svc.port}/{svc.proto}",
+                label,
+                str(len(recs)) if recs else "0",
+                top_id,
+                top_score,
+            )
+            any_row = True
+
+        if any_row:
+            console.print(table)
+            console.print("")

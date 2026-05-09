@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from spektr.core.fetcher import CVERecord
-from spektr.output.report import generate_markdown, save_report
+from spektr.core.nmap_parser import NmapHost, NmapService
+from spektr.output.report import generate_markdown, generate_scan_markdown, save_report
 
 
 def _make_record(**kwargs) -> CVERecord:
@@ -177,3 +178,32 @@ def test_generate_markdown_deduplicates_references() -> None:
     records = [_make_record(references=refs)]
     md = generate_markdown("test", records)
     assert md.count("https://example.com/a") == 1
+
+
+def test_scan_markdown_summary_and_sections() -> None:
+    svc1 = NmapService(host="10.0.0.5", port=80, proto="tcp", product="nginx", version="1.18.0")
+    svc2 = NmapService(host="10.0.0.5", port=22, proto="tcp", product="OpenSSH", version="7.4")
+    host = NmapHost(address="10.0.0.5", hostname="web", services=[svc1, svc2])
+    rec = _make_record(id="CVE-2021-23017", spektr_score=8.4)
+    results = {"nginx 1.18.0": [rec], "openssh 7.4": []}
+    md = generate_scan_markdown("scan.xml", [host], results)
+    assert "spektr scan report" in md
+    assert "web (10.0.0.5)" in md
+    assert "CVE-2021-23017" in md
+    assert "80/tcp" in md
+    assert "22/tcp" in md
+    assert "_No CVEs found._" in md
+
+
+def test_scan_markdown_skips_unversioned_by_default() -> None:
+    svc = NmapService(host="10.0.0.5", port=8080, proto="tcp", product="apache", version="")
+    host = NmapHost(address="10.0.0.5", services=[svc])
+    md = generate_scan_markdown("s.xml", [host], {})
+    assert "8080" not in md
+
+
+def test_scan_markdown_include_unversioned() -> None:
+    svc = NmapService(host="10.0.0.5", port=8080, proto="tcp", product="apache", version="")
+    host = NmapHost(address="10.0.0.5", services=[svc])
+    md = generate_scan_markdown("s.xml", [host], {"apache": []}, include_unversioned=True)
+    assert "8080" in md
